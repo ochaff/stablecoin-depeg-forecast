@@ -75,7 +75,7 @@ class Model(nn.Module):
         enc_out = self.enc_embedding(x_enc, None)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
         
-        class_out = torch.sigmoid(self.classify(enc_out[:, -1, :])), dim = -1
+        class_out = torch.sigmoid(self.classify(enc_out[:, -1, :]))
         return class_out
 
     def forward(self, x_enc):
