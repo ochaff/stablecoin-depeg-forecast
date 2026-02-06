@@ -132,7 +132,9 @@ def add_technical_indicators(
     log_ret = np.log(close).diff()
     out[f"{prefix}vol_{vol_window}"] = log_ret.rolling(window=vol_window, min_periods=vol_window).std()
     out[f"{prefix}vol_{vol_window}_ann"] = out[f"{prefix}vol_{vol_window}"] * np.sqrt(periods_per_year)
-
+    out[f'{prefix}price_raw'] = out['price_raw']
+    out[f'{prefix}price_usd'] = out['price_usd']
+    out.drop(columns=['price_raw', 'price_usd'], inplace=True)
     return out
 
 def eth_price_oracle():
@@ -144,7 +146,7 @@ def eth_price_oracle():
     return df
 
 def btc_price_oracle():
-    BTC_price = pd.read_parquet('./data/BTC_blocks/Chainlink/btcusd_oracle_hourly.parquet')
+    BTC_price = pd.read_parquet('./data/ETH_blocks/Chainlink/btcusd_oracle_hourly.parquet')
     ts = datetime.datetime(2022,1,1, tzinfo=datetime.timezone.utc)
     df = add_technical_indicators(BTC_price, price_col='price_usd', prefix = 'btc_')
     df= df[df.index >= ts]
