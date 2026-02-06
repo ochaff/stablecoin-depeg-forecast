@@ -93,16 +93,17 @@ def add_technical_indicators(
     high_col: str  = None,
     low_col: str  = None,
     close_col: str  = None,
+    prefix: str = "",
 ) -> pd.DataFrame:
     out = df.copy().sort_index()
     close = out[price_col].astype(float)
 
     # --- SMA / EMA ---
     for w in sma_windows:
-        out[f"SMA_{w}"] = close.rolling(window=w, min_periods=w).mean()
+        out[f"{prefix}SMA_{w}"] = close.rolling(window=w, min_periods=w).mean()
 
     for w in ema_windows:
-        out[f"EMA_{w}"] = close.ewm(span=w, adjust=False, min_periods=w).mean()
+        out[f"{prefix}EMA_{w}"] = close.ewm(span=w, adjust=False, min_periods=w).mean()
 
     # --- RSI (Wilder) ---
     delta = close.diff()
@@ -113,8 +114,7 @@ def add_technical_indicators(
     avg_loss = loss.ewm(alpha=1 / rsi_period, adjust=False, min_periods=rsi_period).mean()
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    out[f"RSI_{rsi_period}"] = 100 - (100 / (1 + rs))
-
+    out[f"{prefix}RSI_{rsi_period}"] = 100 - (100 / (1 + rs))
     if high_col and low_col:
         high = out[high_col].astype(float)
         low = out[low_col].astype(float)
@@ -128,19 +128,27 @@ def add_technical_indicators(
     else:
         tr = close.diff().abs()
 
-    out[f"ATR_{atr_period}"] = tr.ewm(alpha=1 / atr_period, adjust=False, min_periods=atr_period).mean()
+    out[f"{prefix}ATR_{atr_period}"] = tr.ewm(alpha=1 / atr_period, adjust=False, min_periods=atr_period).mean()
     log_ret = np.log(close).diff()
-    out[f"vol_{vol_window}"] = log_ret.rolling(window=vol_window, min_periods=vol_window).std()
-    out[f"vol_{vol_window}_ann"] = out[f"vol_{vol_window}"] * np.sqrt(periods_per_year)
+    out[f"{prefix}vol_{vol_window}"] = log_ret.rolling(window=vol_window, min_periods=vol_window).std()
+    out[f"{prefix}vol_{vol_window}_ann"] = out[f"{prefix}vol_{vol_window}"] * np.sqrt(periods_per_year)
 
     return out
 
 def eth_price_oracle():
     ETH_price = pd.read_parquet('./data/ETH_blocks/Chainlink/ethusd_oracle_hourly.parquet')
     ts = datetime.datetime(2022,1,1, tzinfo=datetime.timezone.utc)
-    df = add_technical_indicators(ETH_price, price_col='price_usd')
+    df = add_technical_indicators(ETH_price, price_col='price_usd', prefix = 'eth_')
     df= df[df.index >= ts]
-    df = df.drop(columns = ['price_raw', 'vol_168_ann'])
+    df = df.drop(columns = ['eth_price_raw', 'eth_vol_168_ann'])
+    return df
+
+def btc_price_oracle():
+    BTC_price = pd.read_parquet('./data/BTC_blocks/Chainlink/btcusd_oracle_hourly.parquet')
+    ts = datetime.datetime(2022,1,1, tzinfo=datetime.timezone.utc)
+    df = add_technical_indicators(BTC_price, price_col='price_usd', prefix = 'btc_')
+    df= df[df.index >= ts]
+    df = df.drop(columns = ['btc_price_raw', 'btc_vol_168_ann'])
     return df
 
 def fear_greed_index():
@@ -255,7 +263,7 @@ def decomp_logL_curve(alpha):
 def build_dataset(
             dataset_path,
             alpha, aave, aave_liq, crv, eth_price, 
-            eth_indicators, fear_greed, gegen, target, 
+            eth_indicators, btc_price, btc_indicators, fear_greed, gegen, target, 
             target_window, target_threshold, depeg_side, bypass = False,
             **kwargs):
         dataset = load_uniswap_metrics()
@@ -284,19 +292,33 @@ def build_dataset(
                 print('curve 3pool metrics last date :', crv_3pool_metrics().index[-1])
         if eth_price:
             try:
-                dataset = dataset.join(eth_price_oracle()[['price_usd']].rename(columns={'price_usd':'eth_price_usd'}))
+                dataset = dataset.join(eth_price_oracle()[['eth_price_usd']])
             except Exception as e:      
                 print(e)
                 print('--- could not join eth price oracle ---')    
                 print('eth price oracle last date :', eth_price_oracle().index[-1])
         if eth_indicators: 
             try:
-                dataset = dataset.join(eth_price_oracle().drop(columns=['price_usd']))
+                dataset = dataset.join(eth_price_oracle().drop(columns=['eth_price_usd']))
             except Exception as e:      
                 print(e)
                 print('--- could not join eth price oracle ---')    
                 print('eth price oracle last date :', eth_price_oracle().index[-1])
-        if eth_indicators: 
+        if btc_price:
+            try:
+                dataset = dataset.join(btc_price_oracle()[['btc_price_usd']])
+            except Exception as e:      
+                print(e)
+                print('--- could not join btc price oracle ---')    
+                print('btc price oracle last date :', btc_price_oracle().index[-1])
+        if btc_indicators:
+            try:
+                dataset = dataset.join(btc_price_oracle().drop(columns=['btc_price_usd']))
+            except Exception as e:      
+                print(e)
+                print('--- could not join btc price oracle ---')    
+                print('btc price oracle last date :', btc_price_oracle().index[-1])
+        if fear_greed: 
             try:
                 dfG = fear_greed_index()
                 dfG = dfG.reindex_like(dataset, method='ffill')
@@ -334,19 +356,19 @@ def build_dataset(
             dataset["target"] = ((future_max >= thr) | (future_min <= -thr)).fillna(False).astype(int)
         dataset = dataset.astype('float32').ffill()
         if target:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and fear_greed and gegen): 
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen): 
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet' 
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet' 
             else:
                 if not bypass:
                     dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet')
                 return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet'
         else:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and fear_greed and gegen):   
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen):   
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet'
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet'
             else:
                 if not bypass:
                     dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full.parquet')
@@ -363,6 +385,8 @@ if __name__ == "__main__":
     dataset_building.add_argument('--crv',action='store_false', help='remove Curve 3pool metrics')
     dataset_building.add_argument('--eth_price',action='store_false', help='remove ETH price oracle')
     dataset_building.add_argument('--eth_indicators',action='store_false', help='remove ETH price technical indicators')
+    dataset_building.add_argument('--btc_price',action='store_false', help='remove BTC price oracle')
+    dataset_building.add_argument('--btc_indicators',action='store_false', help='remove BTC price technical indicators')
     dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
     dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
 

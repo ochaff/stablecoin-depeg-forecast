@@ -12,6 +12,8 @@ def parse_arguments():
     dataset_building.add_argument('--crv',action='store_false', help='remove Curve 3pool metrics')
     dataset_building.add_argument('--eth_price',action='store_false', help='remove ETH price oracle')
     dataset_building.add_argument('--eth_indicators',action='store_false', help='remove ETH price technical indicators')
+    dataset_building.add_argument('--btc_price',action='store_false', help='remove BTC price oracle')
+    dataset_building.add_argument('--btc_indicators',action='store_false', help='remove BTC price technical indicators')
     dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
     dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
     class_target = parser.add_argument_group('Classification target arguments')
