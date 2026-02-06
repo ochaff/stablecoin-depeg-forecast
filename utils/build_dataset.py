@@ -6,10 +6,14 @@ from scipy.special import eval_gegenbauer
 import datetime
 import argparse
 
+def add_forecasting_target():
+    state = pd.read_parquet('./data/Uniswap/hourly_pool_state_full.parquet')
+    state.index = state.hour
+    return state['poolTick'].astype(float)
+
 def load_uniswap_metrics():
     metrics1 = pd.read_parquet('./data/Uniswap/USDC_USDT_hourly_metrics.parquet').query('feeTier == 100').sort_values(by='datetime').iloc[:-1,:]
     metrics5 = pd.read_parquet('./data/Uniswap/USDC_USDT_hourly_metrics.parquet').query('feeTier == 500').sort_values(by='datetime').iloc[:-1,:]
-    state = pd.read_parquet('./data/Uniswap/hourly_pool_state_full.parquet')
 
     metrics1.index = metrics1['datetime']
     metrics5.index = metrics5['datetime']
@@ -22,13 +26,7 @@ def load_uniswap_metrics():
         print('--- could not join uniswap metrics for 100 and 500 fee tier ---')
         print('100 and 500 feeTier data last dates :', metrics1.index[-1], metrics5.index[-1])
 
-    state.index = state.hour
-    try:
-        metrics = metrics.join(state['poolTick'].astype(float))
-    except Exception as e:
-        print(e)
-        print('--- could not join uniswap pool state ---')
-        print('pool state last date :', state.index[-1])
+    
     return metrics
 
 def full_aave(coin = 'usdt'):
@@ -92,9 +90,9 @@ def add_technical_indicators(
     atr_period: int = 24,
     vol_window: int = 24 * 7,          # 14 days of hourly bars
     periods_per_year: int = 24 * 365,  # for annualized volatility
-    high_col: str | None = None,
-    low_col: str | None = None,
-    close_col: str | None = None,
+    high_col: str  = None,
+    low_col: str  = None,
+    close_col: str  = None,
 ) -> pd.DataFrame:
     out = df.copy().sort_index()
     close = out[price_col].astype(float)
@@ -254,18 +252,116 @@ def decomp_logL_curve(alpha):
                                             )
     return gegen_scores
 
+def build_dataset(
+            dataset_path,
+            alpha, aave, aave_liq, crv, eth_price, 
+            eth_indicators, fear_greed, gegen, target, 
+            target_window, target_threshold, depeg_side,
+            **kwargs):
+        dataset = load_uniswap_metrics()
+        if aave:
+            try:
+                dataset = dataset.join(full_aave_metrics())
+            except Exception as e:
+                print(e)
+                print('--- could not join aave metrics ---')    
+                print('aave metrics last date :', full_aave_metrics().index[-1])
+        
+        if aave_liq:
+            try:    
+                dataset = dataset.join(aave_liquidations())
+            except Exception as e:
+                print(e)
+                print('--- could not join aave liquidations ---')    
+                print('aave liquidations last date :', aave_liquidations().index[-1])
+        
+        if crv:
+            try:
+                dataset = dataset.join(crv_3pool_metrics())
+            except Exception as e:      
+                print(e)
+                print('--- could not join curve 3pool metrics ---')    
+                print('curve 3pool metrics last date :', crv_3pool_metrics().index[-1])
+        if eth_price:
+            try:
+                dataset = dataset.join(eth_price_oracle()[['price_usd']].rename(columns={'price_usd':'eth_price_usd'}))
+            except Exception as e:      
+                print(e)
+                print('--- could not join eth price oracle ---')    
+                print('eth price oracle last date :', eth_price_oracle().index[-1])
+        if eth_indicators: 
+            try:
+                dataset = dataset.join(eth_price_oracle().drop(columns=['price_usd']))
+            except Exception as e:      
+                print(e)
+                print('--- could not join eth price oracle ---')    
+                print('eth price oracle last date :', eth_price_oracle().index[-1])
+        if eth_indicators: 
+            try:
+                dfG = fear_greed_index()
+                dfG = dfG.reindex_like(dataset, method='ffill')
+                dataset = dataset.join(dfG.rename('fear_greed_index'))
+            except Exception as e:      
+                print(e)
+                print('--- could not load fear and greed index ---')    
+        if gegen:
+            try:
+                gegen_scores = decomp_logL_curve(alpha)
+                dataset = dataset.join(gegen_scores)
+            except Exception as e:      
+                print(e)
+                print('--- could not join gegenbauer liquidity curve scores ---')   
+        try:
+            dataset = dataset.join(add_forecasting_target())
+        except Exception as e:
+            print('--- could not add uniswap active pool price (forecasting target) ---')
+            raise e
+        
+        if target:
+            w = int(target_window)        # hours
+            thr = int(target_threshold)   # bps
+
+            x = dataset["poolTick"].astype(float)      # depeg in bps (can be + or -)
+            x1 = x.shift(-1)                      # look strictly into (t, t+w]
+            if depeg_side == 'up':
+                x1 = x1.clip(lower=0)
+            elif depeg_side == 'down':
+                x1 = x1.clip(upper=0)
+
+            future_max = x1.iloc[::-1].rolling(w, min_periods=1).max().iloc[::-1]
+            future_min = x1.iloc[::-1].rolling(w, min_periods=1).min().iloc[::-1]
+
+            dataset["target"] = ((future_max >= thr) | (future_min <= -thr)).fillna(False).astype(int)
+
+        if target:
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and fear_greed and gegen): 
+                
+                dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet' 
+            else:
+                dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet'
+        else:
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and fear_greed and gegen):   
+                dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet'
+            else:
+                dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_full.parquet'
+         
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='main file arguments')
     dataset_building = parser.add_argument_group('dataset building arguments')
     dataset_building.add_argument('--dataset_path', type=str, default='./preprocessed_datasets', help='path to save the dataset')
     dataset_building.add_argument('--alpha', type=float, help='Gegenbauer polynomial alpha parameter', required=True)
-    dataset_building.add_argument('--aave',action='store_true', help='remove AAVE metrics')
-    dataset_building.add_argument('--aave_liq',action='store_true', help='remove AAVE liquidations')
-    dataset_building.add_argument('--crv',action='store_true', help='remove Curve 3pool metrics')
-    dataset_building.add_argument('--eth_price',action='store_true', help='remove ETH price oracle')
-    dataset_building.add_argument('--eth_indicators',action='store_true', help='remove ETH price technical indicators')
-    dataset_building.add_argument('--fear_greed',action='store_true', help='remove Fear and Greed index')
-    dataset_building.add_argument('--gegen',action='store_true', help='remove Gegenbauer liquidity curve scores')
+    dataset_building.add_argument('--aave',action='store_false', help='remove AAVE metrics')
+    dataset_building.add_argument('--aave_liq',action='store_false', help='remove AAVE liquidations')
+    dataset_building.add_argument('--crv',action='store_false', help='remove Curve 3pool metrics')
+    dataset_building.add_argument('--eth_price',action='store_false', help='remove ETH price oracle')
+    dataset_building.add_argument('--eth_indicators',action='store_false', help='remove ETH price technical indicators')
+    dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
+    dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
 
     class_target = parser.add_argument_group('classification target arguments')
     class_target.add_argument('-t', '--target', action='store_true', help='add binary classification target for depegs')
@@ -274,84 +370,6 @@ if __name__ == "__main__":
     class_target.add_argument('-ds','--depeg_side', type=str, default='both', choices=['both', 'up', 'down'], help='depeg side for classification target')
 
     args = parser.parse_args()
-    alpha = args.alpha
+    dict_args = vars(args)
+    build_dataset(**dict_args)
     
-    dataset = load_uniswap_metrics()
-    if not args.aave:
-        try:
-            dataset = dataset.join(full_aave_metrics())
-        except Exception as e:
-            print(e)
-            print('--- could not join aave metrics ---')    
-            print('aave metrics last date :', full_aave_metrics().index[-1])
-    
-    if not args.aave_liq:
-        try:    
-            dataset = dataset.join(aave_liquidations())
-        except Exception as e:
-            print(e)
-            print('--- could not join aave liquidations ---')    
-            print('aave liquidations last date :', aave_liquidations().index[-1])
-    
-    if not args.crv:
-        try:
-            dataset = dataset.join(crv_3pool_metrics())
-        except Exception as e:      
-            print(e)
-            print('--- could not join curve 3pool metrics ---')    
-            print('curve 3pool metrics last date :', crv_3pool_metrics().index[-1])
-    if not args.eth_price:
-        try:
-            dataset = dataset.join(eth_price_oracle()[['price_usd']].rename(columns={'price_usd':'eth_price_usd'}))
-        except Exception as e:      
-            print(e)
-            print('--- could not join eth price oracle ---')    
-            print('eth price oracle last date :', eth_price_oracle().index[-1])
-    if not args.eth_indicators: 
-        try:
-            dataset = dataset.join(eth_price_oracle().drop(columns=['price_usd']))
-        except Exception as e:      
-            print(e)
-            print('--- could not join eth price oracle ---')    
-            print('eth price oracle last date :', eth_price_oracle().index[-1])
-    if not args.fear_greed:
-        try:
-            dfG = fear_greed_index()
-            dfG = dfG.reindex_like(dataset, method='ffill')
-            dataset = dataset.join(dfG.rename('fear_greed_index'))
-        except Exception as e:      
-            print(e)
-            print('--- could not load fear and greed index ---')    
-    if not args.gegen:
-        try:
-            gegen_scores = decomp_logL_curve(alpha)
-            dataset = dataset.join(gegen_scores)
-        except Exception as e:      
-            print(e)
-            print('--- could not join gegenbauer liquidity curve scores ---')   
-    if args.target:
-        w = int(args.target_window)        # hours
-        thr = int(args.target_threshold)   # bps
-
-        x = dataset["poolTick"].astype(float)      # depeg in bps (can be + or -)
-        x1 = x.shift(-1)                      # look strictly into (t, t+w]
-        if args.depeg_side == 'up':
-            x1 = x1.clip(lower=0)
-        elif args.depeg_side == 'down':
-            x1 = x1.clip(upper=0)
-
-        future_max = x1.iloc[::-1].rolling(w, min_periods=1).max().iloc[::-1]
-        future_min = x1.iloc[::-1].rolling(w, min_periods=1).min().iloc[::-1]
-
-        dataset["target"] = ((future_max >= thr) | (future_min <= -thr)).fillna(False).astype(int)
-
-    if args.target:
-        if args.aave or args.aave_liq or args.crv or args.eth_price or args.eth_indicators or args.fear_greed or args.gegen: 
-            dataset.to_parquet(f'{args.dataset_path}/dataset_alpha_{alpha}_aave-{not args.aave}_ethprice-{not args.eth_price}_ethind-{not args.eth_indicators}_fear-{not args.fear_greed}_gegen-{not args.gegen}_binarytarget_win-{args.target_window}_thresh-{args.target_threshold}_{args.depeg_side}.parquet')
-        else:
-            dataset.to_parquet(f'{args.dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{args.target_window}_thresh-{args.target_threshold}_{args.depeg_side}.parquet')
-    else:
-        if args.aave or args.aave_liq or args.crv or args.eth_price or args.eth_indicators or args.fear_greed or args.gegen:   
-            dataset.to_parquet(f'{args.dataset_path}/dataset_alpha_{alpha}_aave-{not args.aave}_ethprice-{not args.eth_price}_ethind-{not args.eth_indicators}_fear-{not args.fear_greed}_gegen-{not args.gegen}.parquet')
-        else:
-            dataset.to_parquet(f'{args.dataset_path}/dataset_alpha_{alpha}_full.parquet')

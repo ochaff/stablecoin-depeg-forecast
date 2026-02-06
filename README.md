@@ -2,6 +2,8 @@
 
 ## Collect up-to-date data
 
+Download latest release from [stablecoin-onchain-data](https://github.com/MSCA-DN-Digital-Finance/stablecoin-onchain-data).
+
 ````
 bash update_data.sh
 ````
@@ -41,15 +43,15 @@ classification target arguments:
 
 ```
 
-### Example run
+### Examples
 
 Build a dataset for forecasting with $\alpha =0.8$, using all available features.
 ```
-python build_dataset.py --alpha 0.8 
+python -m utils.build_dataset --alpha 0.8 
 ```
 
 Build a dataset for binary classification (depeg early warning), with early warning window 24 hours, 20 bps depeg threshold and both upwards and downwards depegs. 
 
 ```
-python build_dataset.py -t -w 24 -th 20 -ds 'both'
+python -m utils.build_dataset --alpha 0.5 -t -w 24 -th 20 -ds 'both'
 ```
