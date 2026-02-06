@@ -26,8 +26,11 @@ if __name__ == "__main__":
     parser = parse_arguments()
     temp_args = parser.parse_known_args()
     dict_args = vars(temp_args[0])
+    if temp_args[0].method == 'earlywarning':
+        dict_args['target'] = True
+    elif temp_args[0].method == 'forecast':
+        dict_args['target'] = False
     final_dataset_path = build_dataset(**dict_args)
-
     if temp_args[0].remote_logging:
         os.environ["MLFLOW_TRACKING_USERNAME"] = os.getenv("MLFLOW_TRACKING_USERNAME")
         os.environ["MLFLOW_TRACKING_PASSWORD"] = os.getenv("MLFLOW_TRACKING_PASSWORD")

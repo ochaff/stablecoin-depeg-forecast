@@ -15,7 +15,6 @@ def parse_arguments():
     dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
     dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
     class_target = parser.add_argument_group('Classification target arguments')
-    class_target.add_argument('-t', '--target', action='store_true', help='add binary classification target for depegs')
     class_target.add_argument('-w','--target_window', type=int, default=24, help='time window (in hours) for classification target')
     class_target.add_argument('-th','--target_threshold', type=int, default=25, help='threshold (in bps) for classification target')
     class_target.add_argument('-ds','--depeg_side', type=str, default='both', choices=['both', 'up', 'down'], help='depeg side for classification target')
