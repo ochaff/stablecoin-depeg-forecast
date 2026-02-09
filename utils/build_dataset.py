@@ -262,11 +262,49 @@ def decomp_logL_curve(alpha):
                                             )
     return gegen_scores
 
+def gegenbauer_energy_features(df, alpha=0.4):
+    PREFIX = f"Gegenbauer_{alpha}_deg"
+    eps = 1e-12
+
+    cols = [f"{PREFIX}{i}" for i in range(8)]
+    sq = df[cols].pow(2)
+
+    df["E_total"] = sq.sum(axis=1)
+
+
+    shape_cols = [f"{PREFIX}{i}" for i in range(1, 8)]
+    df["E_shape"] = sq[shape_cols].sum(axis=1)
+
+
+    odd_cols  = [f"{PREFIX}{i}" for i in [1, 3, 5, 7]]
+    even_cols = [f"{PREFIX}{i}" for i in [2, 4, 6]]  # exclude 0 on purpose
+
+    df["E_odd"]  = sq[odd_cols].sum(axis=1)
+    df["E_even"] = sq[even_cols].sum(axis=1)
+
+    df["odd_ratio"]  = df["E_odd"]  / (df["E_shape"] + eps)
+    df["even_ratio"] = df["E_even"] / (df["E_shape"] + eps)
+    df["odd_to_even_ratio"] = df["E_odd"] / (df["E_even"] + eps)
+
+
+    low_cols  = [f"{PREFIX}{i}" for i in [1, 2]]
+    mid_cols  = [f"{PREFIX}{i}" for i in [3, 4]]
+    high_cols = [f"{PREFIX}{i}" for i in [5, 6, 7]]
+
+    df["E_low"]  = sq[low_cols].sum(axis=1)
+    df["E_mid"]  = sq[mid_cols].sum(axis=1)
+    df["E_high"] = sq[high_cols].sum(axis=1)
+
+    df["low_ratio"]  = df["E_low"]  / (df["E_shape"] + eps)
+    df["mid_ratio"]  = df["E_mid"]  / (df["E_shape"] + eps)
+    df["high_ratio"] = df["E_high"] / (df["E_shape"] + eps)
+    return df 
+
 def build_dataset(
             dataset_path,
             alpha, aave, aave_liq, crv, eth_price, 
             eth_indicators, btc_price, btc_indicators, fear_greed, gegen, target, 
-            target_window, target_threshold, depeg_side, bypass = False,
+            target_window, target_threshold, depeg_side, dynamic_threshold, bypass = False,
             **kwargs):
         dataset = load_uniswap_metrics()
         if aave:
@@ -332,6 +370,7 @@ def build_dataset(
             try:
                 gegen_scores = decomp_logL_curve(alpha)
                 dataset = dataset.join(gegen_scores)
+                dataset = gegenbauer_energy_features(dataset, alpha=alpha)
             except Exception as e:      
                 print(e)
                 print('--- could not join gegenbauer liquidity curve scores ---')   
@@ -340,32 +379,61 @@ def build_dataset(
         except Exception as e:
             print('--- could not add uniswap active pool price (forecasting target) ---')
             raise e
-        
+            
         if target:
             w = int(target_window)        # hours
             thr = int(target_threshold)   # bps
-
             x = dataset["poolTick"].astype(float)      # depeg in bps (can be + or -)
-            x1 = x.shift(-1)                      # look strictly into (t, t+w]
-            if depeg_side == 'up':
-                x1 = x1.clip(lower=0)
-            elif depeg_side == 'down':
-                x1 = x1.clip(upper=0)
+            upper = x.rolling(30*24, min_periods=1).quantile(0.9975)
+            lower = x.rolling(30*24, min_periods=1).quantile(0.0025)
 
-            future_max = x1.iloc[::-1].rolling(w, min_periods=1).max().iloc[::-1]
-            future_min = x1.iloc[::-1].rolling(w, min_periods=1).min().iloc[::-1]
+            start = dataset.index.min()
+            dyn_ok = pd.Series(
+                dataset.index >= (start + pd.Timedelta(days=30)),
+                index=dataset.index
+            )
+            
+            x1     = x.shift(-1)
+            upper1 = upper.shift(-1)
+            lower1 = lower.shift(-1)
 
-            dataset["target"] = ((future_max >= thr) | (future_min <= -thr)).fillna(False).astype(int)
+            dyn_ok1 = dyn_ok.shift(-1).infer_objects(copy=False)
+            if depeg_side == "up":
+                x1_hard = x1.clip(lower=0)
+            elif depeg_side == "down":
+                x1_hard = x1.clip(upper=0)
+            else:
+                x1_hard = x1
+           
+            future_max = x1_hard.iloc[::-1].rolling(w, min_periods=1).max().iloc[::-1]
+            future_min = x1_hard.iloc[::-1].rolling(w, min_periods=1).min().iloc[::-1]
+            hit_hard   = (future_max >= thr) | (future_min <= -thr)
+          
+            if depeg_side == "up":
+                out_of_band = (x1 > upper1)
+            elif depeg_side == "down":
+                out_of_band = (x1 < lower1)
+            else:
+                out_of_band = (x1 > upper1) | (x1 < lower1)
+            
+            out_of_band = (out_of_band & dyn_ok1).fillna(False)
+
+            hit_dyn = out_of_band.iloc[::-1].rolling(w, min_periods=1).max().iloc[::-1].astype(bool)
+            if dynamic_threshold:
+                dataset["target"] = (hit_hard | hit_dyn).fillna(False).astype(int)
+            else:
+                dataset["target"] = hit_hard.fillna(False).astype(int)
+
         dataset = dataset.astype('float32').ffill()
         if target:
             if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen): 
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet' 
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet' 
             else:
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}.parquet'
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet'
         else:
             if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen):   
                 if not bypass:
@@ -397,6 +465,7 @@ if __name__ == "__main__":
     class_target.add_argument('-w','--target_window', type=int, default=24, help='time window (in hours) for classification target')
     class_target.add_argument('-th','--target_threshold', type=int, default=25, help='threshold (in bps) for classification target')
     class_target.add_argument('-ds','--depeg_side', type=str, default='both', choices=['both', 'up', 'down'], help='depeg side for classification target')
+    class_target.add_argument('-dt','--dynamic_threshold', action='store_true', help='use dynamic threshold for classification target')
 
     args = parser.parse_args()
     dict_args = vars(args)
