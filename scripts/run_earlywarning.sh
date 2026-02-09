@@ -7,7 +7,7 @@ python main_lightning.py \
     --alpha $alpha \
     --model_name iTransformer \
     --method $method \
-    --target_threshold 20 \
+    --target_threshold 19 \
     --target_window 24 \
     --depeg_side both \
     --experiment_name stablecoin-depeg \
@@ -20,7 +20,7 @@ python main_lightning.py \
     --pred_len 1 \
     --val_split 0.7 \
     --test_split 0.85 \
-    --batch_size 64 \
+    --batch_size 100 \
     --test_batch_size 20 \
     --learning_rate 0.0001 \
     --scaler revin \
