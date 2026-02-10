@@ -1,4 +1,4 @@
-for alpha in 0.3 0.4 0.5 1.0
+for alpha in  0.6 1.0 1.5 2.0 3.0 4.0 6.0 8.0
 do 
 
 python run_xgboost.py \

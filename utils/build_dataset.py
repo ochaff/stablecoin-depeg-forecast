@@ -80,6 +80,29 @@ def crv_3pool_metrics():
     crv_metrics = crv[['totalValueLockedUSD', 'hourlyVolumeUSD', 'w_USDC', 'w_USDT', 'curve_entropy']]
     return crv_metrics
 
+def gegenbauer_timeseries_features(df, alpha=0.5, win = 24):
+    df["E_shape_logret"] = df['E_shape'].pct_change()
+    df["E_odd_logret"]  = df['E_odd'].pct_change()
+    df["E_even_logret"] = df['E_even'].pct_change()
+
+    df["odd_ratio_logret"]  = df['odd_ratio'].pct_change()
+    df["even_ratio_logret"] = df['even_ratio'].pct_change()
+    df["odd_to_even_ratio_logret"] = df['odd_to_even_ratio'].pct_change()
+
+    df["E_low_logret"]  = df['E_low'].pct_change()
+    df["E_mid_logret"]  = df['E_mid'].pct_change()
+    df["E_high_logret"] = df['E_high'].pct_change()
+
+    df["low_ratio_logret"]  = df['low_ratio'].pct_change()
+    df["mid_ratio_logret"]  = df['mid_ratio'].pct_change()
+    df["high_ratio_logret"] = df['high_ratio'].pct_change()
+     
+    for i in range(8):
+        df[f'Gegenbauer_{alpha}_deg{i}_MA{win}'] =  df[f'Gegenbauer_{alpha}_deg{i}'].rolling(window = win, min_periods = 1).mean()
+        df[f'Gegenbauer_{alpha}_deg{i}_logret'] =  df[f'Gegenbauer_{alpha}_deg{i}'].pct_change()
+        df[f'Gegenbauer_{alpha}_deg{i}_vol{win}'] =  df[f'Gegenbauer_{alpha}_deg{i}_logret'].rolling(window = win, min_periods = 1).std()
+    df = df.iloc[win:]
+    return df
 
 def add_technical_indicators(
     df: pd.DataFrame,
@@ -304,7 +327,9 @@ def build_dataset(
             dataset_path,
             alpha, aave, aave_liq, crv, eth_price, 
             eth_indicators, btc_price, btc_indicators, fear_greed, gegen, target, 
-            target_window, target_threshold, depeg_side, dynamic_threshold, bypass = False,
+            target_window, target_threshold, depeg_side, dynamic_threshold,
+            gegen_indicators,
+            bypass = False,
             **kwargs):
         dataset = load_uniswap_metrics()
         if aave:
@@ -371,6 +396,12 @@ def build_dataset(
                 gegen_scores = decomp_logL_curve(alpha)
                 dataset = dataset.join(gegen_scores)
                 dataset = gegenbauer_energy_features(dataset, alpha=alpha)
+                if gegen_indicators:
+                    try:
+                        dataset = gegenbauer_timeseries_features(dataset, alpha = alpha)
+                    except Exception as e:      
+                        print(e)
+                        print('--- could not join gegenbauer liquidity curve time series features ---')   
             except Exception as e:      
                 print(e)
                 print('--- could not join gegenbauer liquidity curve scores ---')   
@@ -426,19 +457,19 @@ def build_dataset(
 
         dataset = dataset.astype('float32').ffill()
         if target:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen): 
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators): 
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet' 
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet' 
             else:
                 if not bypass:
                     dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
                 return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet'
         else:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen):   
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators):   
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}.parquet'
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}.parquet'
             else:
                 if not bypass:
                     dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full.parquet')
@@ -459,8 +490,10 @@ if __name__ == "__main__":
     dataset_building.add_argument('--btc_indicators',action='store_false', help='remove BTC price technical indicators')
     dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
     dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
+    dataset_building.add_argument('--gegen_indicators',action='store_false', help='remove Gegenbauer liquidity curve time series features')
 
     class_target = parser.add_argument_group('classification target arguments')
+    class_target.add_argument('-t','--target', action='store_true', help='add binary classification target for depeg event within target window')
     class_target.add_argument('-w','--target_window', type=int, default=24, help='time window (in hours) for classification target')
     class_target.add_argument('-th','--target_threshold', type=int, default=25, help='threshold (in bps) for classification target')
     class_target.add_argument('-ds','--depeg_side', type=str, default='both', choices=['both', 'up', 'down'], help='depeg side for classification target')
