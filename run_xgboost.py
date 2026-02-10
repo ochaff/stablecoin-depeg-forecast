@@ -81,7 +81,7 @@ if __name__ == "__main__":
     training_args.add_argument('--eval_metric', type=str, default='auc', help='evaluation metric for XGBoost')
     training_args.add_argument('--n_estimators', type=int, default=800, help='number of trees for XGBoost')
     training_args.add_argument('--shap_type', type=str, default='tree_path_dependent', help='type of SHAP explainer to use')
-
+    training_args.add_argument('--max_depth', type=int, default=6, help='maximum tree depth for XGBoost')
     args = parser.parse_args()
     dict_args = vars(args)
     dict_args['target'] = True
@@ -155,7 +155,7 @@ if __name__ == "__main__":
     model = XGBClassifier(
         n_estimators=args.n_estimators,
         learning_rate=args.learning_rate,
-        max_depth=6,
+        max_depth=args.max_depth,
         subsample=0.8,
         colsample_bytree=0.8,
         reg_lambda=1.0,

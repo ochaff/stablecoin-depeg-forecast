@@ -58,6 +58,13 @@ python -m utils.build_dataset --alpha 0.5 -t -w 24 -th 20 -ds 'both'
 
 ## Run model training 
 
-The scripts folder contains example scripts to run the model in both early-warning and forecasting mode. 
+The scripts folder contains example scripts to run the model in both early-warning and forecasting mode. A xgboost model can also be trained on the binary classification task (```run_treemodel.sh```). 
 
 Remove **--remote_logging** option if you dont have mlflow remote tracking URI, otherwise use .env. 
+
+```
+bash ./scripts/run_earlywarning.sh
+bash ./scripts/run_forecast.sh
+bash ./scripts/run_treemodel.sh
+```
+
