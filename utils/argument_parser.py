@@ -16,6 +16,7 @@ def parse_arguments():
     dataset_building.add_argument('--btc_indicators',action='store_false', help='remove BTC price technical indicators')
     dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
     dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
+    dataset_building.add_argument('--gegen_indicators',action='store_false', help='remove Gegenbauer liquidity curve technical indicators')
     
     class_target = parser.add_argument_group('Classification target arguments')
     class_target.add_argument('-w','--target_window', type=int, default=24, help='time window (in hours) for classification target')
@@ -44,5 +45,6 @@ def parse_arguments():
     model.add_argument('--patience', type=int, default=10, help='number of epochs with no improvement after which training will be stopped')
     model.add_argument('--verbose', type=int, default=1, help='verbosity level for training')
     model.add_argument('--check_lr', action='store_true', help='whether to check learning rate or not')
+    
 
     return parser

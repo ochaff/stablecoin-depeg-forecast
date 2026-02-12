@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from lightning.pytorch.tuner import Tuner
 import mlflow
 from models.iTransformer import iTransformer_forecast, iTransformer_classifier
+from models.TSMixer import TSMixer_forecast
 from utils.argument_parser import parse_arguments
 from utils.build_dataset import build_dataset
 from data_loader.DataModules import DataModule_forecast, DataModule_earlywarning
@@ -37,7 +38,7 @@ if __name__ == "__main__":
 
     model_dict = {
         'iTransformer':[iTransformer_forecast, iTransformer_classifier],
-        'NBEATS':[]
+        'TSMixer':[TSMixer_forecast, None]
     }
     if temp_args[0].method == "forecast":
         model = model_dict[temp_args[0].model_name][0]
