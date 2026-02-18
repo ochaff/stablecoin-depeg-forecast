@@ -79,13 +79,10 @@ class Model(nn.Module):
     
     def earlywarning(self, x_enc):
         _, _, N = x_enc.shape
-        
-        x_enc = self.revin(x_enc, 'norm')
-
         enc_out = self.enc_embedding(x_enc, None)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
         
-        class_out = torch.sigmoid(self.classify(enc_out[:, -1, :]))
+        class_out = self.classify(enc_out[:, -1, :])
         return class_out
 
     def forward(self, x_enc):
@@ -160,7 +157,7 @@ class iTransformer_earlywarning(Baseclass_earlywarning):
                 seq_len, d_model, dropout, learning_rate,
                 e_layers, activation, embed, freq, n_heads, factor, d_ff,
                 enc_in, method, batch_size, affine, scaler,
-                class_loss, compute_shap, shap_background_size, shap_test_samples,         
+                class_loss, compute_shap, shap_background_size, shap_test_samples, pos_weight, focal_alpha, focal_gamma,        
                 **kwargs
                 ):
         super(iTransformer_earlywarning, self).__init__(
@@ -171,6 +168,9 @@ class iTransformer_earlywarning(Baseclass_earlywarning):
             compute_shap,
             shap_background_size,
             shap_test_samples,
+            focal_alpha,
+            focal_gamma,
+            pos_weight
         )
         self.model = Model(seq_len, pred_len=1, d_model=d_model, d_ff=d_ff, dropout=dropout, e_layers=e_layers, 
                            activation=activation, embed=embed, freq=freq, n_heads=n_heads, factor=factor, enc_in=enc_in, method=method, 
@@ -194,7 +194,7 @@ class iTransformer_earlywarning(Baseclass_earlywarning):
         model_parser.add_argument('--e_layers', type=int, default=2)
         model_parser.add_argument('--scaler', type=str,default='revin')
         model_parser.add_argument('--affine', type=int, choices = [0,1], default=1)
-        Baseclass_forecast.add_task_specific_args(parent_parser)
+        Baseclass_earlywarning.add_task_specific_args(parent_parser)
         return parent_parser
         
 

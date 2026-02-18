@@ -179,12 +179,12 @@ def eth_price_oracle():
 def usd_index_oracle():
     USD_index = pd.read_parquet('./data/ETH_blocks/Chainlink/usd_index_hourly.parquet')
     ts = datetime.datetime(2022,1,1, tzinfo=datetime.timezone.utc)
-    df = add_technical_indicators(USD_index, price_col='usd_index', prefix = 'fx_')
+    logdiff = np.log(USD_index['usd_index']).diff()
+    df = USD_index.copy()
+    df['fx_volatility'] = logdiff.rolling(window=24*7, min_periods=24*7).std()
     df= df[df.index >= ts]
     df = df.drop(columns = ['EUR/USD_fx_foreign_per_usd', 'GBP/USD_fx_foreign_per_usd', 'JPY/USD_fx_foreign_per_usd'])
     return df
-
-
 
 def btc_price_oracle():
     BTC_price = pd.read_parquet('./data/ETH_blocks/Chainlink/btcusd_oracle_hourly.parquet')
@@ -403,14 +403,14 @@ def build_dataset(
                 print('btc price oracle last date :', btc_price_oracle().index[-1])
         if usd_index:
             try:
-                dataset = dataset.join(usd_index_oracle()['fx_usd_index'])
+                dataset = dataset.join(usd_index_oracle()['usd_index'])
             except Exception as e:      
                 print(e)
                 print('--- could not join usd index oracle ---')    
                 print('usd index oracle last date :', usd_index_oracle().index[-1])
         if usd_indicators:
             try:
-                dataset = dataset.join(usd_index_oracle().drop(columns=['fx_usd_index']))
+                dataset = dataset.join(usd_index_oracle().drop(columns=['usd_index']))
             except Exception as e:      
                 print(e)
                 print('--- could not join usd index oracle ---')    
@@ -497,19 +497,19 @@ def build_dataset(
 
         dataset = dataset.astype('float32').ffill()
         if target:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index): 
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators): 
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet' 
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet' 
             else:
                 if not bypass:
                     dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
                 return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet'
         else:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index):   
+            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators):   
                 if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}.parquet'
+                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}.parquet')
+                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}.parquet'
             else:
                 if not bypass:
                     dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full.parquet')

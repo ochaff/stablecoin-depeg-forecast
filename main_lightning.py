@@ -56,20 +56,36 @@ if __name__ == "__main__":
         args.enc_in = pd.read_parquet(args.dataset_path).shape[1] - 1 
 
     dict_args = vars(args)
-    LModel = model(**dict_args)
     if args.method == 'forecast':
         data = DataModule_forecast(**dict_args)
     elif args.method == 'earlywarning':
         data = DataModule_earlywarning(**dict_args)
+        dict_args['pos_weight'] = data.pos_weight
+    LModel = model(**dict_args)
     if args.remote_logging:
         logger = MLFlowLogger(experiment_name = args.experiment_name, run_name = args.run_name, tracking_uri = os.getenv('MLFLOW_TRACKING_URI'), artifact_location = os.getenv('ARTIFACT_URI'), log_model = True)
     else:
         logger = TensorBoardLogger(save_dir='lightning_logs', name=args.experiment_name, version=args.run_name)
         
-    checkpointing = ModelCheckpoint(monitor = 'val_loss', save_top_k = 1, mode= 'min')
+    if args.method == 'earlywarning':
+        if args.validation_metric == 'loss':
+            checkpointing = ModelCheckpoint(monitor = 'val_loss', save_top_k = 1, mode= 'min')
+            early_stop = EarlyStopping(monitor = 'val_loss', patience = args.patience, verbose = args.verbose, mode = 'min')
+        elif args.validation_metric == 'auc':
+            checkpointing = ModelCheckpoint(monitor = 'val_auc', save_top_k = 1, mode= 'max')
+            early_stop = EarlyStopping(monitor = 'val_auc', patience = args.patience, verbose = args.verbose, mode = 'max')
+        elif args.validation_metric == 'auprc':
+             checkpointing = ModelCheckpoint(monitor = 'val_auprc', save_top_k = 1, mode= 'max')
+             early_stop = EarlyStopping(monitor = 'val_auprc', patience = args.patience, verbose = args.verbose, mode = 'max')
+
+    elif args.method == 'forecast':
+        checkpointing = ModelCheckpoint(monitor = 'val_loss', save_top_k = 1, mode= 'min')
+        early_stop = EarlyStopping(monitor = 'val_loss', patience = args.patience, verbose = args.verbose, mode = 'min')
+
+
     trainer = L.Trainer(
                 devices = 1, accelerator = 'gpu',  max_epochs = args.n_epochs, logger = logger, deterministic = 'warn', 
-                callbacks = [EarlyStopping(monitor = 'val_loss', patience = args.patience, verbose = args.verbose), checkpointing, LearningRateMonitor(logging_interval='epoch')],
+                callbacks = [early_stop, checkpointing, LearningRateMonitor(logging_interval='epoch')],
                 detect_anomaly = False,log_every_n_steps = 20
                 )
     if args.check_lr == 1 :

@@ -86,7 +86,7 @@ class MixingLayer(nn.Module):
 
 class Model(nn.Module):
     def __init__(self, seq_len, pred_len, d_model, dropout, n_layers,
-                method, forecast_task, dist_side = None,
+                method, forecast_task = None, dist_side = None,
                 enc_in = None,
                 affine = True, scaler = 'revin', n_cheb =2):
         super(Model, self).__init__()
@@ -123,14 +123,10 @@ class Model(nn.Module):
         return dec_out
     
     def earlywarning(self, x_enc):
-        x_enc = self.revin(x_enc, 'norm')
-
         x_enc = self.mixing_layers(x_enc)
-
         enc_out = self.classify_time(x_enc.transpose(1, 2)).transpose(1, 2)
-        dec_out = self.revin(enc_out, 'denorm')
-        dec_out = self.classify_features(dec_out)
-        dec_out = torch.sigmoid(dec_out)
+        dec_out = self.classify_features(enc_out)
+        # dec_out = torch.sigmoid(dec_out)
         return dec_out
     
     def forward(self, x_enc):
@@ -189,10 +185,9 @@ class TSMixer_earlywarning(Baseclass_earlywarning):
     def __init__(self, 
                 seq_len, pred_len, d_model, dropout,
                 n_layers, learning_rate,
-                enc_in, method, batch_size, test_batch_size, affine, scaler,
-                forecast_task, 
+                enc_in, method, batch_size, test_batch_size, affine, scaler, 
                 compute_shap, shap_background_size, shap_test_samples,
-                class_loss, focal_alpha, focal_gamma,
+                class_loss, focal_alpha, focal_gamma, pos_weight,
                 **kwargs
                 ):
         super(TSMixer_earlywarning, self).__init__(
@@ -205,9 +200,10 @@ class TSMixer_earlywarning(Baseclass_earlywarning):
             shap_test_samples=shap_test_samples,
             focal_alpha= focal_alpha,
             focal_gamma=focal_gamma,
+            pos_weight=pos_weight,
         )
-        self.model = Model(seq_len, pred_len, d_model, dropout, n_layers, method, forecast_task, 
-                           enc_in=enc_in, affine=affine, scaler=scaler,
+        self.model = Model(seq_len, pred_len, d_model, dropout, n_layers, method, forecast_task = None, dist_side = None,
+                           enc_in=enc_in, affine=affine, scaler=scaler
                            )
         self.save_hyperparameters()
 
@@ -219,6 +215,6 @@ class TSMixer_earlywarning(Baseclass_earlywarning):
         model_parser.add_argument('--n_layers', type=int, default=3)
         model_parser.add_argument('--scaler', type=str,default='revin')
         model_parser.add_argument('--affine', type=int, choices = [0,1], default=1)
-        Baseclass_forecast.add_task_specific_args(parent_parser)
+        Baseclass_earlywarning.add_task_specific_args(parent_parser)
         return parent_parser
         

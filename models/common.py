@@ -81,25 +81,52 @@ class RevIN(nn.Module):
     def robust_statistics(self, x, dim=-1, eps=1e-6):
         return None
 
+
 class BinaryFocalLoss(nn.Module):
-    def __init__(self, alpha: float = 0.25, gamma: float = 2.0, reduction: str = "mean", eps: float = 1e-6):
+    def __init__(
+        self,
+        alpha: float = 0.25,
+        gamma: float = 2.0,
+        reduction: str = "mean",
+        pos_weight: torch.Tensor | None = None,
+    ):
         super().__init__()
-        self.alpha = float(alpha)
+        self.alpha = None if alpha is None else float(alpha)
         self.gamma = float(gamma)
         self.reduction = reduction
-        self.eps = float(eps)
 
-    def forward(self, p: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        # p: probabilities in [0,1], y: {0,1}
-        p = p.float().clamp(self.eps, 1.0 - self.eps)
+        if pos_weight is not None:
+            # register so it moves with .to(device)
+            self.register_buffer("pos_weight", pos_weight.float())
+        else:
+            self.pos_weight = None
+
+    def forward(self, logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        # logits: (B,) or (B,1), y: {0,1} same shape
+        if logits.ndim > 1:
+            logits = logits.squeeze(-1)
+        if y.ndim > 1:
+            y = y.squeeze(-1)
+
         y = y.float()
 
-        ce = -(y * torch.log(p) + (1.0 - y) * torch.log(1.0 - p))  # BCE per element
+        # BCE term (stable)
+        bce = F.binary_cross_entropy_with_logits(
+            logits, y, reduction="none", pos_weight=self.pos_weight
+        )
 
-        pt = y * p + (1.0 - y) * (1.0 - p)                          # prob of true class
-        alpha_t = y * self.alpha + (1.0 - y) * (1.0 - self.alpha)
+        # p_t = p if y=1 else (1-p)
+        p = torch.sigmoid(logits)
+        pt = y * p + (1.0 - y) * (1.0 - p)
 
-        loss = alpha_t * (1.0 - pt).pow(self.gamma) * ce
+        focal_factor = (1.0 - pt).pow(self.gamma)
+
+        if self.alpha is None:
+            alpha_t = 1.0
+        else:
+            alpha_t = y * self.alpha + (1.0 - y) * (1.0 - self.alpha)
+
+        loss = alpha_t * focal_factor * bce
 
         if self.reduction == "mean":
             return loss.mean()
@@ -693,7 +720,7 @@ class Baseclass_earlywarning(L.LightningModule):
                 batch_size, test_batch_size,learning_rate,
                 class_loss,
                 compute_shap, shap_background_size, shap_test_samples,
-                focal_alpha, focal_gamma,
+                focal_alpha, focal_gamma, pos_weight = None,
                 **kwargs
                 ):
         super().__init__()
@@ -701,7 +728,10 @@ class Baseclass_earlywarning(L.LightningModule):
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.test_batch_size = test_batch_size
-
+        self.pos_weight = pos_weight
+        if self.pos_weight is None: 
+            pos_weight = torch.tensor([1.0], dtype=torch.float32)
+    
         self.class_loss = class_loss
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
@@ -720,7 +750,8 @@ class Baseclass_earlywarning(L.LightningModule):
         batch_y = batch_y.float()
 
         outputs = self.model(batch_x)
-        loss = self.criterion(outputs, batch_y)
+        logits = outputs.squeeze(-1)  # (B,)
+        loss = self.criterion(logits, batch_y)
         self.log('train_loss', loss)
         return loss
     
@@ -733,14 +764,15 @@ class Baseclass_earlywarning(L.LightningModule):
         batch_y = batch_y.float()  
 
         outputs = self.model(batch_x)                  
-        prob, y = self._ensure_1d_prob_and_target(outputs, batch_y)
+        logits = outputs.squeeze(-1)  # (B,)
 
-        loss = self.criterion(prob, y)
+        loss = self.criterion(logits, batch_y)
+        prob =torch.sigmoid(logits)  # (B,)
 
         self.val_probs.append(prob.detach().cpu())
-        self.val_true.append(y.detach().cpu())
+        self.val_true.append(batch_y.detach().cpu())
 
-        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("val_loss", loss, on_epoch=True)
         return loss
 
     def on_validation_epoch_end(self):
@@ -850,12 +882,12 @@ class Baseclass_earlywarning(L.LightningModule):
         price_next = batch_y2[:,1].float()
 
         outputs = self.model(batch_x)                  # probs
-        prob, y = self._ensure_1d_prob_and_target(outputs, y_target)
-
-        loss = self.criterion(prob, y)
+        logits = outputs.squeeze(-1)  # (B,)
+        prob = torch.sigmoid(logits)  # (B,)
+        loss = self.criterion(logits, y_target)
 
         self.test_probs.append(prob.detach().cpu())
-        self.test_true.append(y.detach().cpu())
+        self.test_true.append(y_target.detach().cpu())
         self.test_seq.append(batch_x.detach().cpu())   
         self.test_price_next.append(price_next.detach().cpu())
 
@@ -942,11 +974,11 @@ class Baseclass_earlywarning(L.LightningModule):
     
     def get_criterion(self, class_loss):
         if class_loss == 'bce':
-            criterion = nn.BCELoss()
+            criterion = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
         elif class_loss == 'focal':
             alpha = self.focal_alpha
             gamma = self.focal_gamma
-            return BinaryFocalLoss(alpha=alpha, gamma=gamma, reduction="mean")
+            return BinaryFocalLoss(alpha=alpha, gamma=gamma, pos_weight=self.pos_weight, reduction="mean")
         else:
             raise ValueError(f"Unknown class_loss: {class_loss}")
 

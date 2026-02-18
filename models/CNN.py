@@ -31,10 +31,6 @@ class CNN(nn.Module):
         self.fc3 = nn.Linear(64, 1) 
 
     def classify(self, x):
-        if self.scaler == 'revin':
-            revin = RevIN(x.shape[1], affine=False, mode='revin')
-            x = revin(x, 'norm')
-
         x = x.permute(0, 2, 1)  
         x = self.conv1(x)
         x = self.activ(x)
@@ -53,7 +49,7 @@ class CNN(nn.Module):
         x = self.fc1(x)
         x = self.fc2(x)
         x = self.fc3(x)
-        x = self.sigmoid(x)
+        # x = self.sigmoid(x)
         return x
 
     def forward(self, x):
@@ -79,23 +75,24 @@ class CNN_earlywarning(Baseclass_earlywarning):
                 d_ff,
                 kernel_size,
                 activation,
+                pos_weight = None,
                 dropout=0.1,
                 scaler='revin',
                 **kwargs):
         super(CNN_earlywarning, self).__init__(batch_size=batch_size, test_batch_size=test_batch_size, learning_rate=learning_rate, class_loss=class_loss,
                                                compute_shap=compute_shap, shap_background_size=shap_background_size, shap_test_samples=shap_test_samples,
-                                               focal_alpha=focal_alpha, focal_gamma=focal_gamma
+                                               focal_alpha=focal_alpha, focal_gamma=focal_gamma, pos_weight=pos_weight
                                                )            
         self.model = CNN(seq_len=seq_len, enc_in=enc_in, d_ff=d_ff, kernel_size=kernel_size, dropout=dropout, method='earlywarning', scaler=scaler, activation=activation)
         self.save_hyperparameters()
 
-        @staticmethod
-        def add_model_specific_args(parent_parser):
-            model_parser = parent_parser.add_argument_group('Model-specific arguments')
-            model_parser.add_argument('--d_ff', type=int, default=128)
-            model_parser.add_argument('--kernel_size', type=int, default=12)
-            model_parser.add_argument('--dropout', type=float, default=0.2)
-            model_parser.add_argument('--scaler', type=str, default='revin')
-            model_parser.add_argument('--activation', type=str, choices=['relu', 'gelu'], default='gelu')
-            Baseclass_earlywarning.add_task_specific_args(parent_parser)
-            return parent_parser
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        model_parser = parent_parser.add_argument_group('Model-specific arguments')
+        model_parser.add_argument('--d_ff', type=int, default=128)
+        model_parser.add_argument('--kernel_size', type=int, default=12)
+        model_parser.add_argument('--dropout', type=float, default=0.2)
+        model_parser.add_argument('--scaler', type=str, default='revin')
+        model_parser.add_argument('--activation', type=str, choices=['relu', 'gelu'], default='gelu')
+        Baseclass_earlywarning.add_task_specific_args(parent_parser)
+        return parent_parser

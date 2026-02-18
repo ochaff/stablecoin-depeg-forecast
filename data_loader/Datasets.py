@@ -62,13 +62,14 @@ class Dataset_forecast(Dataset) :
 
 
 class Dataset_earlywarning(Dataset) :
-    def __init__(self, path, flag, size, split, splitval, scaler):
+    def __init__(self, path, flag, size, split, splitval, scaler, fit_scaler=False):
         super().__init__()
         self.path = path
         self.flag = flag
         self.seq_len = size[0]
         self.split = split
         self.scaler = scaler
+        self.fit_scaler = fit_scaler
         self.splitval = splitval
         assert flag in ['train', 'test', 'val']
         type_map = {'train': 0, 'val': 1, 'test': 2}
@@ -88,19 +89,30 @@ class Dataset_earlywarning(Dataset) :
         
         if self.set_type == 0 :
             df = df.iloc[:self.splitval]
-            if self.scaler != None :
-                df = self.scaler.fit_transform(df)
         elif self.set_type == 1:
             df = df.iloc[self.splitval-self.seq_len:self.split]
-            if self.scaler != None :
-                df = self.scaler.fit_transform(df)
         elif self.set_type == 2 :
             df = df.iloc[self.split-self.seq_len:]
-            if self.scaler != None :
-                df = self.scaler.fit_transform(df)
         
-        self.data_x = df.drop(columns=['target']).values
-        self.data_y = df['target'].values
+
+        drop_cols = ["target"]
+        feature_cols = [c for c in df.columns if c not in drop_cols]
+
+        if self.scaler is not None:
+            X = df[feature_cols].to_numpy(dtype=np.float32)
+
+            if self.fit_scaler:
+                self.scaler.fit(X)
+
+            X = self.scaler.transform(X)
+        else:
+            X = df[feature_cols].to_numpy(dtype=np.float32)
+        # Labels
+        if self.set_type in (0, 1):  # train/val
+            self.data_y = df["target"].to_numpy()
+        else:             
+            self.data_y = df[["target", "poolTick"]].to_numpy()
+        self.data_x = X
 
     def __getitem__(self, index):
         in_start = index
