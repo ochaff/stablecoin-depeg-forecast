@@ -26,7 +26,7 @@ class Model(nn.Module):
 
     def __init__(self, seq_len, pred_len, d_model, d_ff, dropout, e_layers, activation, embed, freq, n_heads, factor, enc_in,
                 method = 'forecast', forecast_task = 'quantile', dist_side = 'both',
-                affine = True, scaler= 'revin',
+                affine = True, revin_type= 'revin',
                 n_cheb = 2):
         super(Model, self).__init__()
         self.seq_len = seq_len
@@ -34,7 +34,7 @@ class Model(nn.Module):
         self.method = method
         self.n_cheb = n_cheb
         self.enc_in = enc_in
-        self.revin = RevIN(self.enc_in, affine = affine, mode=scaler)
+        self.revin = RevIN(self.enc_in, affine = affine, mode=revin_type)
         self.forecast_task = forecast_task
         # Embedding
         self.enc_embedding = DataEmbedding_inverted(seq_len, d_model, embed, freq,
@@ -73,8 +73,17 @@ class Model(nn.Module):
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
         
         dec_out = self.projection(enc_out).permute(0, 2, 1)
-        dec_out = self.revin(dec_out, 'denorm')[:, :, - 1]
-        dec_out = dec_out.view(dec_out.size(0), self.pred_len, -1)
+        if self.forecast_task == 'distribution':
+            dec_out, std_out, cheb_out = torch.split(enc_out, [self.pred_len, self.pred_len, self.pred_len * self.n_cheb], dim=-2)
+            dec_out = self.revin(dec_out, 'denorm')
+            std_out = self.revin(std_out, 'denorm_scale')
+            dec_out = dec_out[:,:,-1]
+            std_out = std_out[:,:,-1]
+            cheb_out = cheb_out[:,:,-1].view(cheb_out.shape[0], self.pred_len, self.n_cheb)
+            dec_out = torch.cat([dec_out.unsqueeze(-1), std_out.unsqueeze(-1), cheb_out], dim= -1)
+        else:
+            dec_out = self.revin(dec_out, 'denorm')
+            dec_out = dec_out[:,:,-1]
         return dec_out
     
     def earlywarning(self, x_enc):
@@ -103,10 +112,10 @@ class iTransformer_forecast(Baseclass_forecast):
     def __init__(self, 
                 seq_len, pred_len, d_model, dropout,
                 e_layers, activation, embed, freq, n_heads, factor, d_ff,
-                enc_in, method, batch_size, test_batch_size, affine, scaler,
+                enc_in, method, batch_size, test_batch_size, affine, revin_type,
                 forecast_task, dist_side, tau_pinball,
                 n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side, 
-                twcrps_smooth_h, u_grid_size, dist_loss,
+                twcrps_smooth_h, u_grid_size, dist_loss, grid_density, quantile_decomp, degree, knot_kind, knot_p,
                 **kwargs
                 ):
         super(iTransformer_forecast, self).__init__(
@@ -123,11 +132,17 @@ class iTransformer_forecast(Baseclass_forecast):
             twcrps_side=twcrps_side,
             twcrps_smooth_h=twcrps_smooth_h,
             u_grid_size=u_grid_size,
+            grid_density=grid_density,
             dist_loss=dist_loss,
+            revin_type=revin_type,
+            quantile_decomp=quantile_decomp,
+            degree=degree,
+            knot_kind=knot_kind,   
+            knot_p=knot_p,
         )
         self.model = Model(seq_len, pred_len, d_model, d_ff, dropout, e_layers, 
                            activation, embed, freq, n_heads, factor, enc_in, method, 
-                           forecast_task, dist_side, affine, scaler, 
+                           forecast_task, dist_side, affine, revin_type,
                            n_cheb
                            )
         self.save_hyperparameters()
@@ -156,7 +171,7 @@ class iTransformer_earlywarning(Baseclass_earlywarning):
     def __init__(self, 
                 seq_len, d_model, dropout, learning_rate,
                 e_layers, activation, embed, freq, n_heads, factor, d_ff,
-                enc_in, method, batch_size, affine, scaler,
+                enc_in, method, batch_size,
                 class_loss, compute_shap, shap_background_size, shap_test_samples, pos_weight, focal_alpha, focal_gamma,        
                 **kwargs
                 ):
@@ -173,9 +188,9 @@ class iTransformer_earlywarning(Baseclass_earlywarning):
             pos_weight
         )
         self.model = Model(seq_len, pred_len=1, d_model=d_model, d_ff=d_ff, dropout=dropout, e_layers=e_layers, 
-                           activation=activation, embed=embed, freq=freq, n_heads=n_heads, factor=factor, enc_in=enc_in, method=method, 
-                        affine=affine, scaler=scaler,
-                           )
+                        activation=activation, embed=embed, freq=freq, n_heads=n_heads, factor=factor, enc_in=enc_in, method=method, 
+                        affine=0, scaler=None,
+                        )
         self.save_hyperparameters()
 
     @staticmethod
@@ -192,8 +207,6 @@ class iTransformer_earlywarning(Baseclass_earlywarning):
         model_parser.add_argument('--activation', type=str, default='gelu')
         model_parser.add_argument('--dropout', type=float,default=0.1)
         model_parser.add_argument('--e_layers', type=int, default=2)
-        model_parser.add_argument('--scaler', type=str,default='revin')
-        model_parser.add_argument('--affine', type=int, choices = [0,1], default=1)
         Baseclass_earlywarning.add_task_specific_args(parent_parser)
         return parent_parser
         

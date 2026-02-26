@@ -40,7 +40,8 @@ if __name__ == "__main__":
     model_dict = {
         'iTransformer':[iTransformer_forecast, iTransformer_earlywarning],
         'TSMixer':[TSMixer_forecast, TSMixer_earlywarning],
-        'CNN': [None, CNN_earlywarning]
+        'CNN': [None, CNN_earlywarning],
+        'TimeXer' : [None, None]
     }
     if temp_args[0].method == "forecast":
         model = model_dict[temp_args[0].model_name][0]

@@ -1,8 +1,14 @@
-for alpha in 1.0
+for alpha in 0.5 
 do
-for task in quantile expectile
+for task in distribution
 do
 for model in TSMixer
+do
+for loss in crps twcrps
+do
+for decomp in chebyshev spline
+do
+for revin in robust
 do
 
 python main_lightning.py \
@@ -11,28 +17,32 @@ python main_lightning.py \
     --model_name $model \
     --method forecast \
     --experiment_name stablecoin-depeg \
-    --run_name "${model}_alpha_${alpha}_${task}" \
-    --n_epochs 50 \
+    --run_name "${model}_alpha_${alpha}_${task}_${loss}_${decomp}_${revin}" \
+    --n_epochs 100 \
     --patience 5 \
     --verbose 1 \
     --check_lr \
-    --seq_len  168 \
+    --seq_len  64 \
     --pred_len 24 \
-    --val_split 0.7 \
-    --test_split 0.85 \
-    --batch_size 512 \
+    --val_split 0.55 \
+    --test_split 0.7 \
+    --batch_size 256 \
     --test_batch_size 20 \
-    --tau_pinball 0.025 \
-    --dist_side both \
-    --scaler revin \
+    --revin_type $revin \
     --affine 1 \
-    --remote_logging \
+    --dist_loss $loss \
     --n_cheb 8 \
-    --dist_loss crps \
     --twcrps_side two_sided \
-    --twcrps_smooth_h 2 \
-    --u_grid_size 256 \
+    --twcrps_smooth_h 1 \
+    --u_grid_size 200 \
+    --grid_density uniform \
+    --quantile_decomp $decomp \
+    --knot_kind uniform \
+    --spline_degree 3 \
 
+done
+done
+done
 done
 done
 done

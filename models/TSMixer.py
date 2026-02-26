@@ -88,20 +88,23 @@ class Model(nn.Module):
     def __init__(self, seq_len, pred_len, d_model, dropout, n_layers,
                 method, forecast_task = None, dist_side = None,
                 enc_in = None,
-                affine = True, scaler = 'revin', n_cheb =2):
+                affine = True, revin_type = 'revin', n_cheb =2):
         super(Model, self).__init__()
         self.n_layers = n_layers
         self.enc_in = enc_in
         self.pred_len = pred_len
         self.seq_len = seq_len
         self.method = method
-        self.revin = RevIN(self.enc_in, affine = affine, mode=scaler)
+        self.revin = RevIN(self.enc_in, affine = affine, mode=revin_type)
+        self.std_activ = nn.Softplus()
+        self.forecast_task = forecast_task
         mixing_layers = [
             MixingLayer(
                 n_series=self.enc_in, input_size=self.seq_len, dropout=dropout, ff_dim=d_model
             )
             for _ in range(self.n_layers)
         ]
+        self.n_cheb = n_cheb
         self.mixing_layers = nn.Sequential(*mixing_layers)
         if dist_side == 'both' and forecast_task in ['quantile', 'expectile']:
             self.projection = nn.Linear(self.seq_len, self.pred_len * 2)
@@ -116,10 +119,23 @@ class Model(nn.Module):
         x_enc = self.revin(x_enc, 'norm')
 
         x_enc = self.mixing_layers(x_enc)
+        if self.forecast_task == "distribution":
+            enc_out = self.projection(x_enc.transpose(1, 2)).transpose(1, 2)
+            dec_out, std_out, cheb_out = torch.split(enc_out, [self.pred_len, self.pred_len, self.pred_len * self.n_cheb], dim=-2)
+            dec_out = self.revin(dec_out, 'denorm')
+            std_out = self.revin(std_out, 'denorm_scale')
+            dec_out = dec_out[:,:,-1]
+            std_out = std_out[:,:,-1]
+            cheb_out = cheb_out[:,:,-1].view(cheb_out.shape[0], self.pred_len, self.n_cheb)
 
-        enc_out = self.projection(x_enc.transpose(1, 2)).transpose(1, 2)
-        dec_out = self.revin(enc_out, 'denorm')
-        dec_out = dec_out[:,:,-1]
+            std_out = self.std_activ(std_out)
+            # print('dec_out: ', dec_out)
+            # print('cheb_out: ', cheb_out)
+            dec_out = torch.cat([dec_out.unsqueeze(-1), std_out.unsqueeze(-1), cheb_out], dim= -1)
+        else:
+            enc_out = self.projection(x_enc.transpose(1, 2)).transpose(1, 2)
+            dec_out = self.revin(enc_out, 'denorm')
+            dec_out = dec_out[:,:,-1]
         return dec_out
     
     def earlywarning(self, x_enc):
@@ -132,7 +148,10 @@ class Model(nn.Module):
     def forward(self, x_enc):
         if self.method == 'forecast':
             dec_out = self.forecast(x_enc)
-            dec_out = torch.squeeze(dec_out.view(dec_out.shape[0], self.pred_len, -1), dim = -1)
+            if self.forecast_task == 'distribution':
+                dec_out = dec_out
+            else:   
+                dec_out = torch.squeeze(dec_out.view(dec_out.shape[0], self.pred_len, -1), dim = -1)
             return dec_out
         elif self.method == 'earlywarning':
             classify_out = self.earlywarning(x_enc).squeeze(dim = -1)
@@ -143,10 +162,10 @@ class TSMixer_forecast(Baseclass_forecast):
     def __init__(self, 
                 seq_len, pred_len, d_model, dropout,
                 n_layers,
-                enc_in, method, batch_size, test_batch_size, affine, scaler,
+                enc_in, method, batch_size, test_batch_size, affine, revin_type,
                 forecast_task, dist_side, tau_pinball,
-                n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side, 
-                twcrps_smooth_h, u_grid_size, dist_loss,
+                n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side,
+                twcrps_smooth_h, u_grid_size, dist_loss, grid_density, quantile_decomp, spline_degree, knot_kind, knot_p,
                 **kwargs
                 ):
         super(TSMixer_forecast, self).__init__(
@@ -163,10 +182,16 @@ class TSMixer_forecast(Baseclass_forecast):
             twcrps_side=twcrps_side,
             twcrps_smooth_h=twcrps_smooth_h,
             u_grid_size=u_grid_size,
+            grid_density=grid_density,
             dist_loss=dist_loss,
+            revin_type=revin_type,
+            quantile_decomp=quantile_decomp,
+            spline_degree=spline_degree,
+            knot_kind=knot_kind,   
+            knot_p=knot_p,
         )
         self.model = Model(seq_len, pred_len, d_model, dropout, n_layers, method, forecast_task, dist_side, 
-                           enc_in, affine, scaler, n_cheb,
+                           enc_in, affine, revin_type, n_cheb,
                            )
         self.save_hyperparameters()
 
@@ -176,7 +201,7 @@ class TSMixer_forecast(Baseclass_forecast):
         model_parser.add_argument('--d_model', type=int, default=2048)
         model_parser.add_argument('--dropout', type=float,default=0.1)
         model_parser.add_argument('--n_layers', type=int, default=3)
-        model_parser.add_argument('--scaler', type=str,default='revin')
+        model_parser.add_argument('--revin_type', type=str, choices = ['revin', 'robust'],default='revin')
         model_parser.add_argument('--affine', type=int, choices = [0,1], default=1)
         Baseclass_forecast.add_task_specific_args(parent_parser)
         return parent_parser
@@ -185,7 +210,7 @@ class TSMixer_earlywarning(Baseclass_earlywarning):
     def __init__(self, 
                 seq_len, pred_len, d_model, dropout,
                 n_layers, learning_rate,
-                enc_in, method, batch_size, test_batch_size, affine, scaler, 
+                enc_in, method, batch_size, test_batch_size, affine, 
                 compute_shap, shap_background_size, shap_test_samples,
                 class_loss, focal_alpha, focal_gamma, pos_weight,
                 **kwargs
@@ -203,7 +228,7 @@ class TSMixer_earlywarning(Baseclass_earlywarning):
             pos_weight=pos_weight,
         )
         self.model = Model(seq_len, pred_len, d_model, dropout, n_layers, method, forecast_task = None, dist_side = None,
-                           enc_in=enc_in, affine=affine, scaler=scaler
+                           enc_in=enc_in, affine=affine, scaler=None
                            )
         self.save_hyperparameters()
 
@@ -213,7 +238,6 @@ class TSMixer_earlywarning(Baseclass_earlywarning):
         model_parser.add_argument('--d_model', type=int, default=2048)
         model_parser.add_argument('--dropout', type=float,default=0.1)
         model_parser.add_argument('--n_layers', type=int, default=3)
-        model_parser.add_argument('--scaler', type=str,default='revin')
         model_parser.add_argument('--affine', type=int, choices = [0,1], default=1)
         Baseclass_earlywarning.add_task_specific_args(parent_parser)
         return parent_parser

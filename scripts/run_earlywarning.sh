@@ -1,8 +1,10 @@
-for alpha in 0.4 1.0 1.5
+for alpha in 1.5
+do
+for metric in auc auprc
 do
 for loss in bce focal
 do
-for model in CNN
+for model in TSMixer CNN
 do
 
 python main_lightning.py \
@@ -17,21 +19,23 @@ python main_lightning.py \
     --n_epochs 50 \
     --patience 10 \
     --verbose 1 \
-    --check_lr 0 \
     --seq_len  168 \
     --pred_len 1 \
-    --val_split 0.6 \
-    --test_split 0.8 \
+    --val_split 0.55 \
+    --test_split 0.7 \
     --batch_size 256 \
     --test_batch_size 20 \
-    --check_lr  \
-    --compute_shap 0 \
+    --learning_rate 0.0001 \
+    --compute_shap 1 \
     --shap_background_size 64 \
     --shap_test_samples 256 \
     --class_loss $loss \
-    --scaler revin \
+    --validation_metric $metric \
     --remote_logging \
+    --scale_pos \
+    --scaler_type robust \
 
+done
 done
 done
 done

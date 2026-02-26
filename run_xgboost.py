@@ -279,7 +279,7 @@ if __name__ == "__main__":
         # (shap.plots.* creates a figure; we just save+log it)
         std_per_feature = shap_values.values.std(axis=0)
         order = np.argsort(std_per_feature)[::-1]
-        shap.plots.beeswarm(shap_values, order=order, max_display=25, show=False)
+        shap.plots.beeswarm(shap_values, order=order, max_display=10, show=False)
         _mlflow_log_current_fig("shap_beeswarm_global.png", artifact_subdir="plots/shap")
         
         
@@ -287,21 +287,21 @@ if __name__ == "__main__":
         shap_values_train = explainer(X_train)
         std_per_feature_train = shap_values_train.values.std(axis=0)
         order = np.argsort(std_per_feature_train)[::-1]
-        shap.plots.beeswarm(shap_values_train, order=order, max_display=25, show=False)
+        shap.plots.beeswarm(shap_values_train, order=order, max_display=10, show=False)
         _mlflow_log_current_fig("shap_beeswarm_global_insample.png", artifact_subdir="plots/shap")
 
         # ---------- 2) SHAP beeswarm for "warnings" subset ----------
         warn_mask = proba_test >= thresh
         sv_warn = shap_values[warn_mask]
         if sv_warn.values.shape[0] > 0:
-            shap.plots.beeswarm(sv_warn, max_display=25, show=False)
+            shap.plots.beeswarm(sv_warn, max_display=10, show=False)
             _mlflow_log_current_fig("shap_beeswarm_above_threshold.png", artifact_subdir="plots/shap")
 
             # ---------- 3) SHAP beeswarm ordered by mean positive contribution in warning regime ----------
             # (Your snippet referenced sv_warn_pos but didn't define it; use sv_warn here.)
             pos_mean = np.clip(sv_warn.values, 0, None).mean(axis=0)
             order_pos = np.argsort(pos_mean)[::-1]
-            shap.plots.beeswarm(sv_warn, order=order_pos, max_display=25, show=False)
+            shap.plots.beeswarm(sv_warn, order=order_pos, max_display=10, show=False)
             _mlflow_log_current_fig("shap_beeswarm_above_threshold_ordered_by_pos_mean.png", artifact_subdir="plots/shap")
 
         # ---------- 4) XGBoost feature importance (gain/weight/cover) ----------

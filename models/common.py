@@ -13,6 +13,8 @@ import tempfile
 import shap
 from pathlib import Path
 from sklearn.metrics import roc_auc_score, average_precision_score, confusion_matrix, roc_curve, precision_recall_curve, auc, average_precision_score
+from models.utils import chebyshev_lobatto_u, uniform_u, chebyshev_basis, cdf_from_quantile_on_grid, _interp_idx_w, ChainingFunction, _ensure_dir, _batched_range, plot_quantile_cdf_pdf, plot_fan_chart, plot_pit_hist, make_open_nonuniform_knots, mspline_ispline_on_grid
+
 
 class RevIN(nn.Module):
     def __init__(self, num_features: int, eps=1e-5, affine=True, mode = 'revin'):
@@ -54,14 +56,9 @@ class RevIN(nn.Module):
                 self.stdev = self.stdev * (torch.relu(self.affine_weight) + self.eps)
         elif self.type == 'robust':
             dim2reduce = tuple(range(1, x.ndim-1))
-            self.mean = torch.median(x, dim=1, keepdim=True).values.detach()
-            x_mad = torch.median(torch.abs(x-self.mean), dim=1, keepdim = True).values.detach()
-            stdev = torch.sqrt(torch.var(x, dim=dim2reduce, keepdim=True, unbiased=False) + self.eps).detach()
-            x_mad_aux = stdev * 0.6744897501960817
-            x_mad = x_mad * (x_mad>0) + x_mad_aux * (x_mad==0)
-            x_mad[x_mad==0] = 1.0
-            x_mad = x_mad + self.eps
-            self.stdev = x_mad
+            self.mean = torch.median(x, dim=dim2reduce, keepdim=True).values.detach()
+            self.stdev = (torch.quantile(x, 0.75, dim=dim2reduce, keepdim=True).values - torch.quantile(x, 0.25, dim=dim2reduce, keepdim=True).values).detach()
+            self.stdev = self.stdev + self.eps
             if self.affine :    
                 self.mean = self.mean + self.affine_bias
                 self.stdev = self.stdev * (torch.relu(self.affine_weight) + self.eps)
@@ -149,41 +146,20 @@ class ShapProbWrapper(nn.Module):
         return out
 
 
-def chebyshev_lobatto_u(J: int, eps: float = 1e-5, device=None):
-    # x_j = cos(pi*j/(J-1)) in [-1,1], dense at endpoints
-    j = torch.arange(J, device=device, dtype=torch.float32)
-    x = torch.cos(torch.pi * j / (J - 1))              # 1..-1
-    u = (x + 1.0) / 2.0                                # in [0,1]
-    u = torch.flip(u, dims=[0])                        # increasing
-    u = u.clamp(eps, 1 - eps)                          # avoid exact 0/1
-    return u
-
-def chebyshev_basis(u: torch.Tensor, K: int):
-    """
-    u: (J,) in (0,1)
-    returns T: (J,K) with T_k(2u-1)
-    """
-    x = 2*u - 1
-    T0 = torch.ones_like(x)
-    if K == 1:
-        return T0.unsqueeze(-1)
-    T1 = x
-    Ts = [T0, T1]
-    for k in range(2, K):
-        Ts.append(2*x*Ts[-1] - Ts[-2])
-    return torch.stack(Ts[:K], dim=-1)
-
 class ChebyshevQuantile(nn.Module):
     """
     params -> (Q(u_j), q(u_j)) on a fixed u-grid, monotone by construction.
     params shape: (B, H, 2+K) = [b, log_s, a_0..a_{K-1}]
     """
-    def __init__(self, K: int, u_grid: torch.Tensor, eps: float = 1e-6, normalize: bool = True):
+    def __init__(self, K: int, u_grid: torch.Tensor, eps: float = 1e-6, normalize: bool = True, u0: float = 0.5, revin_type: str = 'revin'):
         super().__init__()
         self.K = K
         self.eps = eps
         self.normalize = normalize
-
+        self.u0 = u0
+        self.revin_type = revin_type
+        
+        u_grid = u_grid.contiguous()
         # buffers move with .to(device)
         self.register_buffer("u", u_grid)                       # (J,)
         self.register_buffer("du", u_grid[1:] - u_grid[:-1])    # (J-1,)
@@ -197,6 +173,20 @@ class ChebyshevQuantile(nn.Module):
         wu[1:-1] = (du[:-1] + du[1:]) / 2
         self.register_buffer("wu", wu)                          # (J,)
 
+
+        i0,  w0  = _interp_idx_w(self.u, 0.5)
+        self.register_buffer("i0",  i0)
+        self.register_buffer("w0",  w0)
+        
+        if self.revin_type == 'robust':
+            i25, w25 = _interp_idx_w(self.u, 0.25)
+            i75, w75 = _interp_idx_w(self.u, 0.75)
+            self.register_buffer("i25", i25)
+            self.register_buffer("w25", w25)
+            self.register_buffer("i75", i75)
+            self.register_buffer("w75", w75)
+
+
     def forward(self, params: torch.Tensor):
         """
         returns:
@@ -204,278 +194,232 @@ class ChebyshevQuantile(nn.Module):
           q: (B,H,J)  (quantile density)
         """
         b = params[..., 0]                           # (B,H)
-        s = F.softplus(params[..., 1]) + self.eps    # (B,H)
+        s = F.softplus(params[..., 1]) + self.eps     # (B,H)
         a = params[..., 2:]                          # (B,H,K)
 
-        # g(u) = sum_k a_k T_k(u)
+
         g = torch.einsum("bhk,jk->bhj", a, self.T)    # (B,H,J)
 
-        # q(u) > 0
+
         q = F.softplus(g) + self.eps                 # (B,H,J)
 
-        # integrate q to get Q on the u grid (cumulative trapezoid)
         q_mid = 0.5 * (q[..., 1:] + q[..., :-1])     # (B,H,J-1)
         integ = torch.cumsum(q_mid * self.du, dim=-1) # (B,H,J-1)
         integ = torch.cat([torch.zeros_like(b)[..., None], integ], dim=-1)  # (B,H,J)
 
         if self.normalize:
-            # normalize integral so that Q(0)=b and Q(1)=b+s
-            total = integ[..., -1] + self.eps        # (B,H)
-            Q = b[..., None] + s[..., None] * integ / total[..., None]
-            q = s[..., None] * q / total[..., None]  # adjust density consistently
+            def interp(integ, i, w):
+                return (1 - w) * integ[..., i] + w * integ[..., i + 1]  # (B,H)
+
+            i0  = self.i0.item();  w0  = self.w0.item()
+            if self.revin_type == "robust":
+                i25 = self.i25.item(); w25 = self.w25.item()
+                i75 = self.i75.item(); w75 = self.w75.item()
+           
+            Q_u0 = interp(integ, i0, w0)                 # (B,H)
+            Qc = integ - Q_u0[..., None]                 # (B,H,J)
+
+            if self.revin_type == "revin":
+                mu = torch.sum(Qc * self.wu, dim=-1)     # (B,H)
+                m2 = torch.sum((Qc ** 2) * self.wu, dim=-1)
+                var = (m2 - mu ** 2).clamp_min(0.0)
+                alpha = s / torch.sqrt(var + self.eps)   # (B,H)
+
+            elif self.revin_type == "robust":
+                Q25 = interp(integ, i25, w25) - Q_u0     # == interp(Qc, ...)
+                Q75 = interp(integ, i75, w75) - Q_u0
+                iqr = (Q75 - Q25).clamp_min(self.eps)    # (B,H)
+                alpha = s / iqr
+            else:
+                raise ValueError(f"Unknown revin_type: {self.revin_type}")
+
+            Q = b[..., None] + alpha[..., None] * Qc
+            q = alpha[..., None] * q
         else:
             Q = b[..., None] + integ
+        return Q, q
+ 
+class ISplineQuantile(nn.Module):
+    """
+    params -> (Q(u_j), q(u_j)) on a fixed u-grid, monotone by construction via I-splines.
+
+    params shape: (B, H, 2+K) = [b, log_s, a_0..a_{K-1}]
+      b: location
+      s: scale target (positive after softplus)
+      a_k: nonnegative I-spline coefficients (softplus), guarantee monotone Q(u)
+
+    Outputs:
+      Q: (B,H,J) quantile function on u-grid
+      q: (B,H,J) quantile density dQ/du on u-grid (>= 0)
+    """
+    def __init__(
+        self,
+        K: int,
+        u_grid: torch.Tensor,
+        eps: float = 1e-6,
+        normalize: bool = True,
+        u0: float = 0.5,
+        revin_type: str = "revin",
+        # spline params
+        degree: int = 3,
+        knot_kind: str = "power_tails",
+        knot_p: float = 3.0,
+    ):
+        super().__init__()
+        self.K = int(K)
+        self.degree = int(degree)
+        self.eps = float(eps)
+        self.normalize = bool(normalize)
+        self.u0 = float(u0)
+        self.revin_type = revin_type
+
+        u_grid = u_grid.contiguous()
+        self.register_buffer("u", u_grid)                       # (J,)
+        self.register_buffer("du", u_grid[1:] - u_grid[:-1])    # (J-1,)
+
+        # trapezoid weights on u for ∫_0^1 f(u) du (matches your ChebyshevQuantile)
+        du = self.du
+        wu = torch.zeros_like(u_grid)
+        wu[0] = du[0] / 2
+        wu[-1] = du[-1] / 2
+        wu[1:-1] = (du[:-1] + du[1:]) / 2
+        self.register_buffer("wu", wu)                          # (J,)
+
+        # interp indices for anchoring at u0 (and IQR if robust)
+        i0, w0 = _interp_idx_w(self.u, self.u0)
+        self.register_buffer("i0", i0)
+        self.register_buffer("w0", w0)
+
+        if self.revin_type == "robust":
+            i25, w25 = _interp_idx_w(self.u, 0.25)
+            i75, w75 = _interp_idx_w(self.u, 0.75)
+            self.register_buffer("i25", i25); self.register_buffer("w25", w25)
+            self.register_buffer("i75", i75); self.register_buffer("w75", w75)
+
+        # knots + basis sampled on the u-grid
+        
+        knots = make_open_nonuniform_knots(
+                n_basis=self.K,
+                degree=self.degree,
+                a=0.0, b=1.0,
+                kind=knot_kind,
+                p=knot_p,
+                device=u_grid.device,
+            ).to(dtype=u_grid.dtype, device=u_grid.device)
+       
+        self.register_buffer("knots", knots)
+
+        M, I = mspline_ispline_on_grid(self.u, self.knots, degree=self.degree)  # (J,K), (J,K)
+        self.register_buffer("M", M)  # M-spline basis sampled on grid (for q)
+        self.register_buffer("I", I)  # I-spline basis sampled on grid (for Q)
+
+    def forward(self, params: torch.Tensor):
+        """
+        returns:
+          Q: (B,H,J)
+          q: (B,H,J)  quantile density dQ/du >= 0
+        """
+        b = params[..., 0]                           # (B,H)
+        s = F.softplus(params[..., 1]) + self.eps     # (B,H)
+        a_raw = params[..., 2:]                       # (B,H,K)
+
+        # nonnegative coefficients => monotone Q(u)
+        a = F.softplus(a_raw) + self.eps              # (B,H,K)
+
+        # Q_base(u) = sum_k a_k I_k(u)
+        Q_base = torch.einsum("bhk,jk->bhj", a, self.I)  # (B,H,J)
+
+        # q(u) = dQ/du = sum_k a_k M_k(u)
+        q = torch.einsum("bhk,jk->bhj", a, self.M).clamp_min(self.eps)  # (B,H,J)
+
+        if self.normalize:
+            def interp(x, i, w):
+                i = int(i.item()); w = float(w.item())
+                return (1 - w) * x[..., i] + w * x[..., i + 1]  # (B,H)
+
+            Q_u0 = interp(Q_base, self.i0, self.w0)        # (B,H)
+            Qc = Q_base - Q_u0[..., None]                  # centered at u0
+
+            if self.revin_type == "revin":
+                mu = torch.sum(Qc * self.wu, dim=-1)       # (B,H)
+                m2 = torch.sum((Qc ** 2) * self.wu, dim=-1)
+                var = (m2 - mu ** 2).clamp_min(0.0)
+                alpha = s / torch.sqrt(var + self.eps)     # (B,H)
+
+            elif self.revin_type == "robust":
+                Q25 = interp(Q_base, self.i25, self.w25) - Q_u0
+                Q75 = interp(Q_base, self.i75, self.w75) - Q_u0
+                iqr = (Q75 - Q25).clamp_min(self.eps)
+                alpha = s / iqr
+
+            else:
+                raise ValueError(f"Unknown revin_type: {self.revin_type}")
+
+            Q = b[..., None] + alpha[..., None] * Qc
+            q = alpha[..., None] * q
+        else:
+            Q = b[..., None] + Q_base
 
         return Q, q
-       
-def cdf_from_quantile_on_grid(Q: torch.Tensor, u: torch.Tensor, z_grid: torch.Tensor, eps: float = 1e-8):
-    """
-    Q:      (B,H,J) monotone increasing in J
-    u:      (J,)
-    z_grid: (Z,)
-    returns:
-      F: (B,H,Z) with F(z_grid)
-    """
-    assert Q.ndim == 3
-    B, H, J = Q.shape
-    Z = z_grid.numel()
-
-    # Expand u so we can gather with batched indices
-    u_expand = u.view(1, 1, J).expand(B, H, J)  # (B,H,J)
-
-    # idx_raw in [0..J], shape (B,H,Z)
-    idx_raw = torch.searchsorted(Q, z_grid.view(1, 1, Z).expand(B, H, Z), right=True)
-
-    # Masks for out-of-range z
-    below = (idx_raw == 0)
-    above = (idx_raw >= J)
-
-    # Clamp to [1, J-1] so we can take idx-1 and idx safely
-    idx = idx_raw.clamp(1, J - 1)
-
-    idx0 = idx - 1
-    idx1 = idx
-
-    Q0 = Q.gather(-1, idx0)
-    Q1 = Q.gather(-1, idx1)
-    u0 = u_expand.gather(-1, idx0)
-    u1 = u_expand.gather(-1, idx1)
-
-    z = z_grid.view(1, 1, Z).expand(B, H, Z)
-    t = (z - Q0) / (Q1 - Q0 + eps)
-    F = u0 + t * (u1 - u0)
-
-    # Set exact tails
-    F = torch.where(below, torch.zeros_like(F), F)
-    F = torch.where(above, torch.ones_like(F), F)
-    return F
 
 
 class CRPSFromQuantiles(nn.Module):
-    """
-    CRPS(F,y) = ∫ (F(z) - 1{y<=z})^2 dz
-              = ∫_0^1 (u - 1{y<=Q(u)})^2 q(u) du
-    """
-    def __init__(self, u: torch.Tensor, wu: torch.Tensor):
+    def __init__(self, u: torch.Tensor, wu: torch.Tensor, crps_convention: bool = True):
         super().__init__()
         self.register_buffer("u", u)    # (J,)
         self.register_buffer("wu", wu)  # (J,)
+        self.crps_convention = crps_convention
 
-    def forward(self, Q: torch.Tensor, q: torch.Tensor, y: torch.Tensor):
-        # Q,q: (B,H,J), y: (B,H)
-        I = (y.unsqueeze(-1) <= Q).float()
-        u = self.u.view(1, 1, -1)
-        integrand = (u - I).pow(2) * q
-        loss_bh = torch.sum(integrand * self.wu.view(1, 1, -1), dim=-1)
-        return loss_bh.mean()
+    def forward(self, Q: torch.Tensor, q:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        # Q: (B,H,J), y: (B,H)
+        u = self.u.view(1, 1, -1)                 # (1,1,J)
+        y_ = y.unsqueeze(-1).repeat(1,1,u.shape[-1])                      # (B,H,J)
+
+        e = y_ - Q    
+        pinball = torch.maximum(u*e, (u-1)*e)                            # (B,H,J)
+
+        loss_bh = torch.sum(pinball * self.wu.view(1, 1, -1), dim=-1)  # (B,H)
+
+        loss = loss_bh.mean()
+        if self.crps_convention:
+            loss = 2.0 * loss                     # so loss equals CRPS (common convention)
+
+        return loss
 
 
 class ThresholdWeightedCRPSFromQuantiles(nn.Module):
-    def __init__(self, u: torch.Tensor, wu: torch.Tensor,
-                 threshold_low: float, threshold_high: float,
-                 side: str = "two_sided", smooth_h: float = 0.0):
+    def __init__(self, u: torch.Tensor, wu: torch.Tensor, crps_convention: bool = True, 
+                threshold_low: float = None, threshold_high: float = None, 
+                side: str = "two_sided", smooth_h: float = 0.0):
         super().__init__()
-        self.register_buffer("u", u)
-        self.register_buffer("wu", wu)
-
+        self.register_buffer("u", u)    # (J,)
+        self.register_buffer("wu", wu)  # (J,)
+        self.crps_convention = crps_convention
+        self.threshold_low = threshold_low
+        self.threshold_high = threshold_high
         self.side = side
         self.smooth_h = smooth_h
+        self.chain = ChainingFunction(threshold_low=threshold_low, 
+                                      threshold_high=threshold_high, 
+                                      side=side, 
+                                      smooth_h=smooth_h
+                                      )
 
-        if side == "two_sided":
-            self.threshold = (threshold_low, threshold_high)
-        elif side == "below":
-            self.threshold = float(threshold_low)
-        elif side == "above":
-            self.threshold = float(threshold_high)
-        else:
-            raise ValueError("side must be one of: below, above, two_sided")
+    def forward(self, Q: torch.Tensor, q:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        # Q: (B,H,J), y: (B,H)
+        u = self.u.view(1, 1, -1)                 # (1,1,J)
+        y_ = y.unsqueeze(-1).repeat(1,1,u.shape[-1])                      # (B,H,J)
 
-    def weight(self, z: torch.Tensor):
-        h = self.smooth_h
-        if self.side == "two_sided":
-            rL, rU = self.threshold
-            if h and h > 0:
-                wL = torch.sigmoid((rL - z) / h)  # ~1 if z<=rL
-                wU = torch.sigmoid((z - rU) / h)  # ~1 if z>=rU
-                return wL + wU
-            return (z <= rL).float() + (z >= rU).float()
+        e = self.chain(y_) - self.chain(Q)    
+        pinball = torch.maximum(u*e, (u-1)*e)                            # (B,H,J)
 
-        r = self.threshold
-        if h and h > 0:
-            if self.side == "below":
-                return torch.sigmoid((r - z) / h)
-            return torch.sigmoid((z - r) / h)
+        loss_bh = torch.sum(pinball * self.wu.view(1, 1, -1), dim=-1)  # (B,H)
 
-        if self.side == "below":
-            return (z <= r).float()
-        return (z >= r).float()
+        loss = loss_bh.mean()
+        if self.crps_convention:
+            loss = 2.0 * loss                     # so loss equals CRPS (common convention)
+        return loss
 
-    def forward(self, Q: torch.Tensor, q: torch.Tensor, y: torch.Tensor):
-        I = (y.unsqueeze(-1) <= Q).float()
-        wQ = self.weight(Q)
-        u = self.u.view(1, 1, -1)
-        integrand = wQ * (u - I).pow(2) * q
-        loss_bh = torch.sum(integrand * self.wu.view(1, 1, -1), dim=-1)
-        return loss_bh.mean()
-   
-def _ensure_dir(path: str):
-    os.makedirs(path, exist_ok=True)
-
-def plot_quantile_cdf_pdf(u_grid, Q_i_h, q_i_h, z_grid, cdf_i_h,
-                          thr_low=None, thr_high=None, side="two_sided",
-                          title_prefix="", out_path_prefix="dist"):
-    """
-    u_grid: (J,)
-    Q_i_h:  (J,)
-    q_i_h:  (J,)
-    z_grid: (Z,)
-    cdf_i_h:(Z,)
-    """
-    # 1) Quantile function
-    plt.figure(figsize=(7,4))
-    plt.plot(u_grid, Q_i_h, lw=2)
-    plt.xlabel("u")
-    plt.ylabel("Q(u)  [depeg bps]")
-    plt.title(f"{title_prefix} Quantile function")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(out_path_prefix + "_quantile.png", dpi=150)
-    plt.close()
-
-    # 2) CDF
-    plt.figure(figsize=(7,4))
-    plt.plot(z_grid, cdf_i_h, lw=2)
-    if side in ["two_sided", "below"] and thr_low is not None:
-        plt.axvline(thr_low, color="black", ls="--", lw=1, label="thr_low")
-    if side in ["two_sided", "above"] and thr_high is not None:
-        plt.axvline(thr_high, color="black", ls="--", lw=1, label="thr_high")
-    plt.xlabel("z  [depeg bps]")
-    plt.ylabel("F(z)")
-    plt.title(f"{title_prefix} CDF")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(out_path_prefix + "_cdf.png", dpi=150)
-    plt.close()
-
-    # 3) Implied PDF at quantile grid: f(Q(u)) ≈ 1 / q(u)
-    pdf_at_Q = 1.0 / np.maximum(q_i_h, 1e-8)
-    plt.figure(figsize=(7,4))
-    plt.plot(Q_i_h, pdf_at_Q, lw=2)
-    if side in ["two_sided", "below"] and thr_low is not None:
-        plt.axvline(thr_low, color="black", ls="--", lw=1)
-    if side in ["two_sided", "above"] and thr_high is not None:
-        plt.axvline(thr_high, color="black", ls="--", lw=1)
-    plt.xlabel("z = Q(u)  [depeg bps]")
-    plt.ylabel("pdf(z)  (approx)")
-    plt.title(f"{title_prefix} Implied PDF")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(out_path_prefix + "_pdf.png", dpi=150)
-    plt.close()
-
-
-def plot_fan_chart(u_grid, Q_i_allH, y_true_i_allH,
-                   qs=(0.01, 0.05, 0.5, 0.95, 0.99),
-                   thr_low=None, thr_high=None, side="two_sided",
-                   title_prefix="", out_path="fan.png"):
-    """
-    Q_i_allH: (H,J)
-    y_true_i_allH: (H,)
-    """
-    H, J = Q_i_allH.shape
-    u_grid = np.asarray(u_grid)
-
-    def Q_at_p(Q_h, p):
-        return np.interp(p, u_grid, Q_h)
-
-    bands = {p: np.array([Q_at_p(Q_i_allH[h], p) for h in range(H)]) for p in qs}
-    x = np.arange(H)
-
-    plt.figure(figsize=(9,4))
-    # widest band first
-    if 0.01 in bands and 0.99 in bands:
-        plt.fill_between(x, bands[0.01], bands[0.99], alpha=0.12, label="98% PI")
-    if 0.05 in bands and 0.95 in bands:
-        plt.fill_between(x, bands[0.05], bands[0.95], alpha=0.20, label="90% PI")
-
-    if 0.5 in bands:
-        plt.plot(x, bands[0.5], lw=2, label="median")
-
-    plt.plot(x, y_true_i_allH, lw=1.5, color="red", label="true")
-
-    if side in ["two_sided", "below"] and thr_low is not None:
-        plt.axhline(thr_low, color="black", ls="--", lw=1)
-    if side in ["two_sided", "above"] and thr_high is not None:
-        plt.axhline(thr_high, color="black", ls="--", lw=1)
-
-    plt.xlabel("horizon step")
-    plt.ylabel("depeg bps")
-    plt.title(f"{title_prefix} Fan chart over horizon")
-    plt.grid(True, alpha=0.3)
-    plt.legend(loc="best")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
-
-
-def plot_pit_hist(u_grid, Q_all, y_true, horizon=0, bins=20,
-                  title_prefix="", out_path="pit.png"):
-    """
-    PIT for a fixed horizon: PIT = F(y). We approximate via inverting Q:
-      PIT = interp(y, Q(u), u)
-    Q_all:  (B,H,J)
-    y_true: (B,H)
-    """
-    u_grid = np.asarray(u_grid)
-    Q_h = Q_all[:, horizon, :]      # (B,J)
-    y_h = y_true[:, horizon]        # (B,)
-
-    pits = []
-    for i in range(Q_h.shape[0]):
-        Qi = Q_h[i]
-        yi = y_h[i]
-        # clip to support to avoid NaNs
-        if yi <= Qi[0]:
-            pit = 0.0
-        elif yi >= Qi[-1]:
-            pit = 1.0
-        else:
-            pit = float(np.interp(yi, Qi, u_grid))
-        pits.append(pit)
-
-    pits = np.asarray(pits)
-
-    plt.figure(figsize=(7,4))
-    plt.hist(pits, bins=bins, range=(0,1), density=True, alpha=0.7, edgecolor="black")
-    plt.axhline(1.0, color="red", lw=1.5, label="uniform density")
-    plt.xlabel("PIT = F(y)")
-    plt.ylabel("density")
-    plt.title(f"{title_prefix} PIT histogram (h={horizon})")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
 
 
 
@@ -484,7 +428,8 @@ class Baseclass_forecast(L.LightningModule):
                 batch_size, test_batch_size,
                 learning_rate, method,
                 forecast_task, dist_side, tau_pinball,
-                n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side, twcrps_smooth_h, u_grid_size, dist_loss,
+                n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side, twcrps_smooth_h, u_grid_size, dist_loss, grid_density, revin_type, 
+                quantile_decomp, spline_degree, knot_kind, knot_p,
                 cdf_grid_size=512, cdf_grid_min=None, cdf_grid_max=None,
                 **kwargs
                 ):
@@ -497,9 +442,17 @@ class Baseclass_forecast(L.LightningModule):
         self.cdf_grid_min = cdf_grid_min
         self.cdf_grid_max = cdf_grid_max
         self.forecast_task = forecast_task
+        self.grid_density = grid_density
+        self.revin_type = revin_type
         if self.forecast_task == 'distribution':
-            u = chebyshev_lobatto_u(u_grid_size)
-            self.quantile = ChebyshevQuantile(K=n_cheb, u_grid=u, normalize=True)
+            if self.grid_density == 'chebyshev':
+                u = chebyshev_lobatto_u(u_grid_size)
+            elif self.grid_density == 'uniform':
+                u = uniform_u(u_grid_size)
+            if self.quantile_decomp == "chebyshev":    
+                self.quantile = ChebyshevQuantile(K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type)
+            elif self.quantile_decomp == "spline":
+                self.quantile = ISplineQuantile(u_grid=u, normalize=True, revin_type=self.revin_type, degree=spline_degree, knot_kind=knot_kind, knot_p=knot_p)
             if dist_loss == 'crps':
                 self.criterion = CRPSFromQuantiles(self.quantile.u, self.quantile.wu)
             else:
@@ -570,92 +523,143 @@ class Baseclass_forecast(L.LightningModule):
             self.x_test = torch.cat((self.x_test, batch_x.detach().cpu()), dim=0)
             self.y_test = torch.cat((self.y_test, batch_y.detach().cpu()), dim=0)
             self.y_pred = torch.cat((self.y_pred, outputs.detach().cpu()), dim=0)
-        
-    def on_test_epoch_end(self):
 
+
+    def on_test_epoch_end(self):
         run_dir = f'./{self.logger.experiment_id}/{self.logger.run_id}'
         plots_dir = os.path.join(run_dir, "plots")
         _ensure_dir(run_dir)
         _ensure_dir(plots_dir)
 
+        # Everything starts on CPU
         A = {
             'true': np.array(self.y_test),
             'pred': np.array(self.y_pred),
             'seq':  np.array(self.x_test),
         }
 
-        # ---- compute Q,q and CDF if distribution ----
         if self.forecast_task == 'distribution':
-            with torch.no_grad():
-                params = torch.tensor(A['pred'], dtype=torch.float32, device=self.device)  # (B,H,2+K)
-                Q_t, q_t = self.quantile(params)  # (B,H,J)
+            # -------------------------
+            # Basic CPU arrays / shapes
+            # -------------------------
+            params_np = A['pred']                      # (B,H,2+K)
+            y_true = A['true']                         # (B,H)
+            B, H, P = params_np.shape
+            J = int(self.quantile.u.numel())
 
-                # CDF grid in bps space
-                y_np = A['true']
-                zmin = self.cdf_grid_min if self.cdf_grid_min is not None else float(np.nanmin(y_np) - 10.0)
-                zmax = self.cdf_grid_max if self.cdf_grid_max is not None else float(np.nanmax(y_np) + 10.0)
-                z_grid_t = torch.linspace(zmin, zmax, self.cdf_grid_size, device=self.device)
-
-                Fz_t = cdf_from_quantile_on_grid(Q_t, self.quantile.u, z_grid_t)
-
-            # move to CPU numpy for saving/plotting
-            u_grid = self.quantile.u.detach().cpu().numpy()
-            Q = Q_t.detach().cpu().numpy()
-            q = q_t.detach().cpu().numpy()
-            z_grid = z_grid_t.detach().cpu().numpy()
-            cdf = Fz_t.detach().cpu().numpy()
-
-            A['u_grid'] = u_grid
-            A['Q']      = Q
-            A['q']      = q
-            A['z_grid'] = z_grid
-            A['cdf']    = cdf
-
-            # ---- choose a few representative examples to plot ----
-            y_true = A['true']  # (B,H)
-            B, H = y_true.shape
-
-            # pick "most extreme" samples by max |depeg| over horizon
+            # Choose a few representative samples (CPU)
             score = np.max(np.abs(y_true), axis=1)
-            topk = np.argsort(-score)[:3]  # top 3
+            topk = np.argsort(-score)[:3]
             randk = np.random.choice(np.arange(B), size=min(2, B), replace=False)
-            idxs = list(dict.fromkeys(list(topk) + list(randk)))  # unique, keep order
+            idxs = list(dict.fromkeys(list(topk) + list(randk)))  # unique
 
             thr_low = self.hparams.twcrps_threshold_low
             thr_high = self.hparams.twcrps_threshold_high
             side = self.hparams.twcrps_side
 
-            # plot per-sample at a selected horizon (e.g. h=0)
+            # u-grid for plots (CPU)
+            u_grid = self.quantile.u.detach().cpu().numpy()
+            A['u_grid'] = u_grid
+
+            # Pre-allocate CPU storage for Q,q if you want to save them
+            # (If too big, remove these and only keep params.)
+            Q_cpu = np.empty((B, H, J), dtype=np.float32)
+            q_cpu = np.empty((B, H, J), dtype=np.float32)
+
+            # -------------------------
+            # Chunked quantile eval
+            # -------------------------
+            bs = getattr(self.hparams, "test_quantile_batch_size", 128)
+
+            device = self.device
+            self.quantile.eval()
+
+            with torch.inference_mode():
+                for b0, b1 in _batched_range(B, bs):
+                    # Move only a chunk to GPU
+                    params_t = torch.from_numpy(params_np[b0:b1]).to(device=device, dtype=torch.float32)
+
+                    Q_t, q_t = self.quantile(params_t)  # (b1-b0,H,J)
+
+                    # Immediately move to CPU and store
+                    Q_cpu[b0:b1] = Q_t.detach().cpu().numpy()
+                    q_cpu[b0:b1] = q_t.detach().cpu().numpy()
+
+                    # free GPU chunk tensors ASAP
+                    del params_t, Q_t, q_t
+
+            A['Q'] = Q_cpu
+            A['q'] = q_cpu
+
+            # -------------------------
+            # CDF grid: compute only for selected examples (small)
+            # -------------------------
+            # grid bounds from true values (CPU)
+            y_np = y_true
+            zmin = self.cdf_grid_min if self.cdf_grid_min is not None else float(np.nanmin(y_np) - 10.0)
+            zmax = self.cdf_grid_max if self.cdf_grid_max is not None else float(np.nanmax(y_np) + 10.0)
+            z_grid = np.linspace(zmin, zmax, self.cdf_grid_size, dtype=np.float32)
+            A['z_grid'] = z_grid
+
+            # Compute cdf only for plotting indices and (optionally) one horizon
+            # If your plot function uses cdf[i,h0], just compute that.
             h0 = 0
-            for j, i in enumerate(idxs):
+            cdf_sel = {}
+
+            with torch.inference_mode():
+                z_grid_t = torch.from_numpy(z_grid).to(device=device)
+
+                # small tensor for selected indices
+                sel = torch.tensor(idxs, device=device, dtype=torch.long)
+
+                # Move selected Q to GPU only
+                Q_sel_t = torch.from_numpy(Q_cpu[idxs, h0:h0+1]).to(device=device)  # (n,1,J)
+
+                # This call can still broadcast to (n,1,J,Z) internally,
+                # but n is tiny so it won't OOM.
+                Fz_sel_t = cdf_from_quantile_on_grid(Q_sel_t, self.quantile.u, z_grid_t)  # (n,1,Z)
+
+                Fz_sel = Fz_sel_t.detach().cpu().numpy()  # (n,1,Z)
+
+                for k, i in enumerate(idxs):
+                    cdf_sel[int(i)] = Fz_sel[k, 0]  # (Z,)
+
+                del Q_sel_t, Fz_sel_t, z_grid_t
+
+            A['cdf_sel_h0'] = cdf_sel  # dict: sample_id -> cdf(Z,) for horizon h0
+
+            # -------------------------
+            # Plotting (CPU)
+            # -------------------------
+            for i in idxs:
                 prefix = os.path.join(plots_dir, f"s{i}_h{h0}")
                 title = f"sample {i}, h={h0}"
 
                 plot_quantile_cdf_pdf(
                     u_grid=u_grid,
-                    Q_i_h=Q[i, h0],
-                    q_i_h=q[i, h0],
-                    z_grid=z_grid,
-                    cdf_i_h=cdf[i, h0],
+                    Q_i_h=Q_cpu[i, h0],                 # (J,)
+                    q_i_h=q_cpu[i, h0],                 # (J,)
+                    z_grid=z_grid,                      # (Z,)
+                    cdf_i_h=cdf_sel[int(i)],            # (Z,)
                     thr_low=thr_low, thr_high=thr_high, side=side,
                     title_prefix=title,
                     out_path_prefix=prefix
                 )
 
-                # fan chart across all horizons for that sample
                 plot_fan_chart(
                     u_grid=u_grid,
-                    Q_i_allH=Q[i],               # (H,J)
-                    y_true_i_allH=y_true[i],     # (H,)
+                    Q_i_allH=Q_cpu[i],                  # (H,J)
+                    y_true_i_allH=y_true[i],            # (H,)
                     thr_low=thr_low, thr_high=thr_high, side=side,
                     title_prefix=f"sample {i}",
                     out_path=os.path.join(plots_dir, f"s{i}_fan.png")
                 )
 
-            # PIT histogram (calibration) for horizon 0
+            # PIT histogram: you can keep your existing function if it only uses Q and y_true
+            # (It should not compute a full z-grid CDF internally.)
             plot_pit_hist(
                 u_grid=u_grid,
-                Q_all=Q,
+                Q_all=Q_cpu,
                 y_true=y_true,
                 horizon=0,
                 bins=20,
@@ -665,14 +669,13 @@ class Baseclass_forecast(L.LightningModule):
 
         # ---- save pickle ----
         out_path = os.path.join(run_dir, "preds_test_set.pkl")
-        pkl.dump(A, open(out_path, 'wb'))
+        with open(out_path, 'wb') as f:
+            pkl.dump(A, f)
 
         # ---- log artifacts ----
         self.logger.experiment.log_artifact(self.logger.run_id, out_path)
 
-        # log plots directory if created
         if os.path.isdir(plots_dir):
-            # log individual files (simple and reliable)
             for fn in os.listdir(plots_dir):
                 if fn.endswith(".png"):
                     self.logger.experiment.log_artifact(self.logger.run_id, os.path.join(plots_dir, fn))
@@ -711,7 +714,12 @@ class Baseclass_forecast(L.LightningModule):
         class_parser.add_argument('--twcrps_threshold_high', type=float, default=10.0)  # for price target
         class_parser.add_argument('--twcrps_side', type=str, default='two_sided', choices=['below','above', 'two_sided'])
         class_parser.add_argument('--twcrps_smooth_h', type=float, default=2)
-        class_parser.add_argument('--u_grid_size', type=int, default=256)
+        class_parser.add_argument('--u_grid_size', type=int, default=128, help='number of points in the Chebyshev grid for distribution forecasting')
+        class_parser.add_argument('--grid_density', type=str, default='uniform', choices=['chebyshev', 'uniform'], help='type of grid for distribution forecasting')
+        class_parser.add_argument('--quantile_decomp', type=str, default='chebyshev', choices=['chebyshev', 'spline'], help='type of quantile decomposition for distribution forecasting')
+        class_parser.add_argument('--spline_degree', type=int, default=3, help='degree of I-spline basis (if quantile_decomp is spline)')
+        class_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power_tails', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)', choices=['power_tails', 'uniform', 'quantiles'])
+        class_parser.add_argument('--knot_p', type=float, default=3.0, help='power parameter for power-tail knot placement (if quantile_decomp is spline and knot_kind is power_tails)')
         return parent_parser
 
 

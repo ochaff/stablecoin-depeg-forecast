@@ -23,7 +23,7 @@ def parse_arguments():
     model.add_argument('--run_name', type=str, default=None, help='name of the MLFlow run')
     model.add_argument('--model_root_path', type=str, default='./models', help='root path of the pytorch models')
     model.add_argument('--method', type = str, default='forecast', choices=['forecast', 'earlywarning'], help='forecasting or early warning classification task')
-    model.add_argument('--model_name', type=str, default='iTransformer', help='name of the model to be trained')
+    model.add_argument('--model_name', type=str, choices=['iTransformer', 'TSMixer', 'CNN', 'TimeXer'], default='iTransformer', help='name of the model to be trained')
     model.add_argument('--n_epochs', type=int, default=50, help = 'number of epochs for training')
     model.add_argument('--patience', type=int, default=10, help='number of epochs with no improvement after which training will be stopped')
     model.add_argument('--verbose', type=int, default=1, help='verbosity level for training')

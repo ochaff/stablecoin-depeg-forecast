@@ -6,5 +6,3 @@ unzip -o $type\_data.zip;
 rm $type\_data.zip;
 
 done;
-
-python -m utils.swap_size_curve 
