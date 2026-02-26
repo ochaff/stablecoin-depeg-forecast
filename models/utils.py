@@ -52,57 +52,65 @@ def make_open_nonuniform_knots(n_basis: int, degree: int, a=0.0, b=1.0, kind="po
     internal, _ = torch.sort(torch.unique(internal))
     return make_open_knots_from_internal(internal, degree=degree, a=a, b=b)
 
+
 def bspline_basis(u: torch.Tensor, knots: torch.Tensor, degree: int):
     """
-    Cox-de Boor recursion (vectorized over u).
-    u: (J,)
-    knots: (n_knots,) = n_basis + degree + 1
-    returns B: (J, n_basis)
+    Stable Cox–de Boor recursion for B-spline basis evaluation on a 1D grid.
+
+    u:     (J,) increasing (can be non-uniform)
+    knots: (n_knots,) = n_basis + degree + 1 (open/clamped recommended)
+    returns:
+      B: (J, n_basis)
     """
     u = u.to(dtype=torch.float64)
     t = knots.to(dtype=torch.float64, device=u.device)
     k = int(degree)
 
+    # number of basis functions
     n_basis = t.numel() - (k + 1)
-    n = t.numel() - 1  # number of p=0 functions
+    if n_basis <= 0:
+        raise ValueError("Invalid knots/degree: need len(knots) >= degree+2")
 
-    # p = 0
-    # N0 has shape (J, n)
-    left = t[:-1][None, :]
-    right = t[1:][None, :]
-    uu = u[:, None]
-    N = ((uu >= left) & (uu < right)).to(u.dtype)
+    # p=0 basis: N_{i,0}(u) = 1 if t_i <= u < t_{i+1}
+    uu = u[:, None]  # (J,1)
+    t0 = t[:-1][None, :]  # (1, n_knots-1)
+    t1 = t[1:][None, :]   # (1, n_knots-1)
+    N = ((uu >= t0) & (uu < t1)).to(u.dtype)  # (J, n_knots-1)
 
-    # include u==t[-1] in the last interval
+    # include the right endpoint u == t[-1] in the last basis
     N[u == t[-1], -1] = 1.0
 
-    # recursion up to degree k
+    # recursion for d = 1..k
     for d in range(1, k + 1):
-        # N currently has shape (J, n - (d-1))
-        m = N.shape[1] - 1  # next has m columns = n - d
+        # after each step, number of columns decreases by 1
+        n_cols = N.shape[1]
+        m = n_cols - 1
         if m <= 0:
             break
 
-        # denom1_i = t[i+d] - t[i] for i=0..m-1
-        denom1 = (t[d:d + m] - t[0:m]).clamp_min(0.0)
-        denom2 = (t[d + 1:d + 1 + m] - t[1:1 + m]).clamp_min(0.0)
+        t_i      = t[0:m]             # (m,)
+        t_i_d    = t[d:d + m]         # (m,)
+        t_i1     = t[1:m + 1]         # (m,)
+        t_i_d1   = t[d + 1:d + 1 + m] # (m,)
 
-        term1 = torch.zeros((u.numel(), m), dtype=u.dtype, device=u.device)
-        term2 = torch.zeros((u.numel(), m), dtype=u.dtype, device=u.device)
+        den1 = t_i_d  - t_i           # (m,)
+        den2 = t_i_d1 - t_i1          # (m,)
 
-        mask1 = denom1 > 0
-        mask2 = denom2 > 0
+        # safe divisions (avoid NaNs when denom = 0 due to repeated knots)
+        den1_safe = torch.where(den1 > 0, den1, torch.ones_like(den1))
+        den2_safe = torch.where(den2 > 0, den2, torch.ones_like(den2))
 
-        if mask1.any():
-            term1[:, mask1] = ((uu[:, mask1] - t[0:m][mask1]) / denom1[mask1]) * N[:, :m][:, mask1]
-        if mask2.any():
-            term2[:, mask2] = ((t[d + 1:d + 1 + m][mask2] - uu[:, mask2]) / denom2[mask2]) * N[:, 1:m + 1][:, mask2]
+        w1 = (uu - t_i[None, :]) / den1_safe[None, :]
+        w2 = (t_i_d1[None, :] - uu) / den2_safe[None, :]
+
+        term1 = w1 * N[:, :m] * (den1 > 0).to(u.dtype)[None, :]
+        term2 = w2 * N[:, 1:m + 1] * (den2 > 0).to(u.dtype)[None, :]
 
         N = term1 + term2
 
-    # after recursion, N should have n_basis columns
-    N = N[:, :n_basis]
-    return N  # (J, n_basis) in float64
+    # after k steps, N has (n_knots-1-k) = n_basis columns
+    B = N[:, :n_basis]
+    return B.to(dtype=u.dtype)  # float64
 
 def mspline_ispline_on_grid(u: torch.Tensor, knots: torch.Tensor, degree: int, eps=1e-12):
     """

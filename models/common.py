@@ -49,15 +49,15 @@ class RevIN(nn.Module):
     def _get_statistics(self, x):
         if self.type == 'revin':
             dim2reduce = tuple(range(1, x.ndim-1))
-            self.mean = torch.mean(x, dim=dim2reduce, keepdim=True).detach()
-            self.stdev = torch.sqrt(torch.var(x, dim=dim2reduce, keepdim=True, unbiased=False) + self.eps).detach()
+            self.mean = torch.mean(x, dim=1, keepdim=True).detach()
+            self.stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + self.eps).detach()
             if self.affine :    
                 self.mean = self.mean + self.affine_bias
                 self.stdev = self.stdev * (torch.relu(self.affine_weight) + self.eps)
         elif self.type == 'robust':
             dim2reduce = tuple(range(1, x.ndim-1))
-            self.mean = torch.median(x, dim=dim2reduce, keepdim=True).values.detach()
-            self.stdev = (torch.quantile(x, 0.75, dim=dim2reduce, keepdim=True).values - torch.quantile(x, 0.25, dim=dim2reduce, keepdim=True).values).detach()
+            self.mean = torch.quantile(x, 0.5, dim=1, keepdim=True).detach()
+            self.stdev = (torch.quantile(x, 0.75, dim=1, keepdim=True).detach() - torch.quantile(x, 0.25, dim=1, keepdim=True).detach())
             self.stdev = self.stdev + self.eps
             if self.affine :    
                 self.mean = self.mean + self.affine_bias
@@ -444,6 +444,10 @@ class Baseclass_forecast(L.LightningModule):
         self.forecast_task = forecast_task
         self.grid_density = grid_density
         self.revin_type = revin_type
+        self.quantile_decomp = quantile_decomp
+        self.spline_degree = spline_degree
+        self.knot_kind = knot_kind
+        self.knot_p = knot_p   
         if self.forecast_task == 'distribution':
             if self.grid_density == 'chebyshev':
                 u = chebyshev_lobatto_u(u_grid_size)
@@ -452,7 +456,7 @@ class Baseclass_forecast(L.LightningModule):
             if self.quantile_decomp == "chebyshev":    
                 self.quantile = ChebyshevQuantile(K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type)
             elif self.quantile_decomp == "spline":
-                self.quantile = ISplineQuantile(u_grid=u, normalize=True, revin_type=self.revin_type, degree=spline_degree, knot_kind=knot_kind, knot_p=knot_p)
+                self.quantile = ISplineQuantile(K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type, degree=self.spline_degree, knot_kind=self.knot_kind, knot_p=self.knot_p)
             if dist_loss == 'crps':
                 self.criterion = CRPSFromQuantiles(self.quantile.u, self.quantile.wu)
             else:
@@ -718,7 +722,7 @@ class Baseclass_forecast(L.LightningModule):
         class_parser.add_argument('--grid_density', type=str, default='uniform', choices=['chebyshev', 'uniform'], help='type of grid for distribution forecasting')
         class_parser.add_argument('--quantile_decomp', type=str, default='chebyshev', choices=['chebyshev', 'spline'], help='type of quantile decomposition for distribution forecasting')
         class_parser.add_argument('--spline_degree', type=int, default=3, help='degree of I-spline basis (if quantile_decomp is spline)')
-        class_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power_tails', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)', choices=['power_tails', 'uniform', 'quantiles'])
+        class_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power_tails', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)')
         class_parser.add_argument('--knot_p', type=float, default=3.0, help='power parameter for power-tail knot placement (if quantile_decomp is spline and knot_kind is power_tails)')
         return parent_parser
 
@@ -760,7 +764,7 @@ class Baseclass_earlywarning(L.LightningModule):
         outputs = self.model(batch_x)
         logits = outputs.squeeze(-1)  # (B,)
         loss = self.criterion(logits, batch_y)
-        self.log('train_loss', loss)
+        self.log('train_loss', loss, on_epoch=True)
         return loss
     
     def on_validation_epoch_start(self):

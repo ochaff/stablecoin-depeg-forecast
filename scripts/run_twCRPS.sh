@@ -4,11 +4,13 @@ for task in distribution
 do
 for model in TSMixer
 do
-for loss in crps twcrps
+for loss in crps
 do
-for decomp in chebyshev spline
+for decomp in spline
 do
-for revin in robust
+for revin in revin
+do
+for knot_p in 1/3,3
 do
 
 python main_lightning.py \
@@ -37,9 +39,12 @@ python main_lightning.py \
     --u_grid_size 200 \
     --grid_density uniform \
     --quantile_decomp $decomp \
-    --knot_kind uniform \
+    --knot_kind power_tails \
+    --knot_p 2 \
     --spline_degree 3 \
+    --remote_logging \
 
+done
 done
 done
 done
