@@ -20,7 +20,8 @@ from models.utils import (
     _ensure_dir, _batched_range, plot_quantile_cdf_pdf, plot_fan_chart, 
     plot_pit_hist, logit_u, power_tails_u, plot_pit_ecdf, 
     plot_tail_exceedance_calibration, plot_tail_exceedance_ratio,
-    plot_pit_hist_from_values, plot_pit_ecdf_from_values, compute_spliced_pit_batched
+    plot_pit_hist_from_values, plot_pit_ecdf_from_values, compute_spliced_pit_batched,
+    plot_es_diagnostics, plot_var_es_timeline, compute_spliced_var_es_batched, build_spliced_tail_plot_grid, plot_tail_cdf_survival
     )
 from models.helper_classes import RevIN, ChebyshevQuantile, ISplineQuantile, SplicedGPDQuantile, ShapProbWrapper
 from models.losses import GaussianCRPS, GaussianTWCRPS, CRPSFromQuantiles, ThresholdWeightedCRPSFromQuantiles, BinaryFocalLoss, ChainingFunction
@@ -146,7 +147,7 @@ class Baseclass_forecast(L.LightningModule):
         else:
             loss = self.criterion(outputs, batch_y)
 
-        self.log('train_loss', loss)
+        self.log('train_loss', loss, on_epoch = True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -273,20 +274,38 @@ class Baseclass_forecast(L.LightningModule):
                 z_grid_t = torch.from_numpy(z_grid).to(device=device, dtype=torch.float32)
 
                 if is_spliced_gpd:
-                    # Use analytic tail-aware CDF/PDF
-                    params_sel_t = torch.from_numpy(params_np[idxs, h0:h0+1]).to(device=device, dtype=torch.float32)  # (n,1,P)
+                    # For spliced tails, use a sample-specific plotting grid built from
+                    # extreme predicted quantiles so the extrapolated GPD tails are visible.
+                    z_grid_sel = {}
+                    tail_plot_info = {}
 
-                    Fz_sel_t = self.quantile.cdf_on_grid(params_sel_t, z_grid_t)   # (n,1,Z)
-                    fz_sel_t = self.quantile.pdf_on_grid(params_sel_t, z_grid_t)   # (n,1,Z)
+                    for i in idxs:
+                        params_i_t = torch.from_numpy(params_np[i:i+1, h0:h0+1]).to(device=device, dtype=torch.float32)  # (1,1,P)
 
-                    Fz_sel = Fz_sel_t.detach().cpu().numpy()
-                    fz_sel = fz_sel_t.detach().cpu().numpy()
+                        # Build wide sample-specific grid from extreme predicted quantiles
+                        z_grid_i_t, q_ext_i = build_spliced_tail_plot_grid(
+                            spliced_quantile=self.quantile,
+                            params_i_h=params_i_t,
+                            alpha_plot_low=1e-5,     # adjust if you want even rarer tail display
+                            alpha_plot_high=1e-5,
+                            n_grid=self.cdf_grid_size,
+                            pad_frac=0.05,
+                        )
 
-                    for k, i in enumerate(idxs):
-                        cdf_sel[int(i)] = Fz_sel[k, 0]   # (Z,)
-                        pdf_sel[int(i)] = fz_sel[k, 0]   # (Z,)
+                        Fz_i_t = self.quantile.cdf_on_grid(params_i_t, z_grid_i_t)  # (1,1,Z)
+                        fz_i_t = self.quantile.pdf_on_grid(params_i_t, z_grid_i_t)  # (1,1,Z)
 
-                    del params_sel_t, Fz_sel_t, fz_sel_t
+                        z_grid_sel[int(i)] = z_grid_i_t.detach().cpu().numpy().astype(np.float32)
+                        cdf_sel[int(i)] = Fz_i_t[0, 0].detach().cpu().numpy().astype(np.float32)
+                        pdf_sel[int(i)] = fz_i_t[0, 0].detach().cpu().numpy().astype(np.float32)
+                        tail_plot_info[int(i)] = q_ext_i
+
+                        del params_i_t, z_grid_i_t, Fz_i_t, fz_i_t
+
+                    A["z_grid_sel_h0"] = z_grid_sel
+                    A["cdf_sel_h0"] = cdf_sel
+                    A["pdf_sel_h0"] = pdf_sel
+                    A["tail_plot_info_h0"] = tail_plot_info
 
                 else:
                     # Original interior-grid CDF approximation
@@ -357,15 +376,21 @@ class Baseclass_forecast(L.LightningModule):
             # -------------------------
             # Plotting
             # -------------------------
+            
             for i in idxs:
                 prefix = os.path.join(plots_dir, f"s{i}_h{h0}")
                 title = f"sample {i}, h={h0}"
+
+                if is_spliced_gpd:
+                    z_grid_i = A["z_grid_sel_h0"][int(i)]
+                else:
+                    z_grid_i = z_grid
 
                 plot_quantile_cdf_pdf(
                     u_grid=u_grid,
                     Q_i_h=Q_cpu[i, h0],                 # (J,)
                     q_i_h=q_cpu[i, h0],                 # (J,)
-                    z_grid=z_grid,                      # (Z,)
+                    z_grid=z_grid_i,                    # sample-specific for spliced tails
                     cdf_i_h=cdf_sel[int(i)],            # (Z,)
                     thr_low=thr_low, thr_high=thr_high, side=side,
                     title_prefix=title,
@@ -380,6 +405,17 @@ class Baseclass_forecast(L.LightningModule):
                     title_prefix=f"sample {i}",
                     out_path=os.path.join(plots_dir, f"s{i}_fan.png")
                 )
+
+                if is_spliced_gpd:
+                    tail_info_i = A["tail_plot_info_h0"][int(i)]
+                    plot_tail_cdf_survival(
+                        z_grid=z_grid_i,
+                        cdf_i_h=cdf_sel[int(i)],
+                        xL=tail_info_i["q_lo_splice"],
+                        xU=tail_info_i["q_hi_splice"],
+                        title_prefix=title,
+                        out_path=os.path.join(plots_dir, f"s{i}_h{h0}_tail_logcdf.png"),
+                    )
 
             # -------------------------
             # PIT / ECDF / tail-calibration diagnostics
@@ -446,6 +482,90 @@ class Baseclass_forecast(L.LightningModule):
             A["pit_stats_h0"] = pit_stats
             A["pit_ecdf_stats_h0"] = pit_ecdf_stats
             A["tail_exceedance_h0"] = tail_summary
+            
+            # -------------------------
+            # Exact VaR / ES diagnostics for spliced GPD tails
+            # -------------------------
+            if is_spliced_gpd:
+                # choose levels that really stress the tails
+                es_alphas = np.array([0.001, 0.002, 0.005, 0.01, 0.02, 0.05], dtype=np.float32)
+
+                # lower tail
+                varL_h0, esL_h0 = compute_spliced_var_es_batched(
+                    spliced_quantile=self.quantile,
+                    params_np=params_np,
+                    alphas=es_alphas,
+                    horizon=0,
+                    side="lower",
+                    batch_size=bs,
+                    n_int=256,
+                    device=device,
+                )
+
+                # upper tail
+                varU_h0, esU_h0 = compute_spliced_var_es_batched(
+                    spliced_quantile=self.quantile,
+                    params_np=params_np,
+                    alphas=es_alphas,
+                    horizon=0,
+                    side="upper",
+                    batch_size=bs,
+                    n_int=256,
+                    device=device,
+                )
+
+                es_lower_summary = plot_es_diagnostics(
+                    y_true=y_true[:, 0],
+                    var_pred=varL_h0,
+                    es_pred=esL_h0,
+                    alphas=es_alphas,
+                    side="lower",
+                    title_prefix="Test set h=0",
+                    out_path=os.path.join(plots_dir, "es_diagnostics_lower_h0.png"),
+                    log_x=True,
+                )
+
+                es_upper_summary = plot_es_diagnostics(
+                    y_true=y_true[:, 0],
+                    var_pred=varU_h0,
+                    es_pred=esU_h0,
+                    alphas=es_alphas,
+                    side="upper",
+                    title_prefix="Test set h=0",
+                    out_path=os.path.join(plots_dir, "es_diagnostics_upper_h0.png"),
+                    log_x=True,
+                )
+
+                # timeline plot at 1% if available, otherwise nearest level
+                k_es = int(np.argmin(np.abs(es_alphas - 0.01)))
+
+                plot_var_es_timeline(
+                    y_true=y_true[:, 0],
+                    var_alpha=varL_h0[:, k_es],
+                    es_alpha=esL_h0[:, k_es],
+                    alpha=float(es_alphas[k_es]),
+                    side="lower",
+                    title_prefix="Test set h=0",
+                    out_path=os.path.join(plots_dir, "var_es_timeline_lower_h0.png"),
+                )
+
+                plot_var_es_timeline(
+                    y_true=y_true[:, 0],
+                    var_alpha=varU_h0[:, k_es],
+                    es_alpha=esU_h0[:, k_es],
+                    alpha=float(es_alphas[k_es]),
+                    side="upper",
+                    title_prefix="Test set h=0",
+                    out_path=os.path.join(plots_dir, "var_es_timeline_upper_h0.png"),
+                )
+
+                A["es_alphas_h0"] = es_alphas
+                A["var_lower_h0"] = varL_h0
+                A["es_lower_h0"] = esL_h0
+                A["var_upper_h0"] = varU_h0
+                A["es_upper_h0"] = esU_h0
+                A["es_lower_summary_h0"] = es_lower_summary
+                A["es_upper_summary_h0"] = es_upper_summary
 
         elif self.forecast_task == 'gaussian':
             # -------------------------

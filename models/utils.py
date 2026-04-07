@@ -922,25 +922,304 @@ def compute_spliced_pit_batched(spliced_quantile, params_np, y_true_np, horizon=
 
     return pits
 
-# def chaining_function(x, threshold_high, threshold_low, side="two_sided", smooth_h=0.0):
-#     if side == "two_sided":
-#         if smooth_h and smooth_h > 0:
-#             v_low = -torch.nn.functional.softplus((threshold_low - x) * smooth_h)  
-#             v_high = torch.nn.functional.softplus((x - threshold_high) * smooth_h) 
-#             v = v_low + v_high
-#         else:
-#             v = (x-threshold_low)*(x <= threshold_low).float() + (x-threshold_high)*(x >= threshold_high).float()
-#     elif side == "below":
-#         if smooth_h and smooth_h > 0:
-#             v = -torch.nn.functional.softplus((threshold_low - x) * smooth_h)  
-#         else:
-#             v = (x-threshold_low)*(x <= threshold_low).float()
-#     elif side == "above":
-#         if smooth_h and smooth_h > 0:
-#             v = torch.nn.functional.softplus((x - threshold_high) * smooth_h) 
-#         else:
-#             v = (x-threshold_high)*(x >= threshold_high).float()
-#     return v
+def build_spliced_tail_plot_grid(
+    spliced_quantile,
+    params_i_h: torch.Tensor,
+    alpha_plot_low: float = 1e-5,
+    alpha_plot_high: float = 1e-5,
+    n_grid: int = 800,
+    pad_frac: float = 0.05,
+):
+    """
+    Build a plotting z-grid from extreme predicted quantiles of one sample/horizon.
+
+    params_i_h: (1,1,P)
+    returns:
+      z_grid_t: (Z,)
+      q_ext_t:  dict of extreme quantiles
+    """
+    device = params_i_h.device
+    dtype = params_i_h.dtype
+
+    u_eval = torch.tensor(
+        [alpha_plot_low, spliced_quantile.u_low, 0.5, spliced_quantile.u_high, 1.0 - alpha_plot_high],
+        device=device,
+        dtype=dtype,
+    ).clamp(min=spliced_quantile.eps, max=1.0 - spliced_quantile.eps)
+
+    with torch.inference_mode():
+        Q_eval = spliced_quantile.quantile_at_levels(params_i_h, u_eval)[0, 0]  # (5,)
+
+    q_lo_ext = Q_eval[0].item()
+    q_lo_splice = Q_eval[1].item()
+    q_med = Q_eval[2].item()
+    q_hi_splice = Q_eval[3].item()
+    q_hi_ext = Q_eval[4].item()
+
+    zmin = q_lo_ext
+    zmax = q_hi_ext
+
+    width = max(zmax - zmin, 1e-6)
+    zmin = zmin - pad_frac * width
+    zmax = zmax + pad_frac * width
+
+    z_grid_t = torch.linspace(zmin, zmax, n_grid, device=device, dtype=dtype)
+
+    q_ext = {
+        "q_lo_ext": q_lo_ext,
+        "q_lo_splice": q_lo_splice,
+        "q_med": q_med,
+        "q_hi_splice": q_hi_splice,
+        "q_hi_ext": q_hi_ext,
+    }
+    return z_grid_t, q_ext
+
+def plot_tail_cdf_survival(
+    z_grid,
+    cdf_i_h,
+    xL=None,
+    xU=None,
+    title_prefix="",
+    out_path="tail_log_cdf.png",
+    eps=1e-12,
+):
+    """
+    Plot log lower-tail CDF and log upper-tail survival.
+    Useful to visualize extrapolated GPD tails.
+    """
+    z_grid = np.asarray(z_grid, dtype=np.float64)
+    F = np.asarray(cdf_i_h, dtype=np.float64)
+
+    lower = np.clip(F, eps, 1.0)
+    upper = np.clip(1.0 - F, eps, 1.0)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), dpi=200)
+
+    axes[0].plot(z_grid, np.log10(lower), color="royalblue", lw=2)
+    if xL is not None:
+        axes[0].axvline(xL, color="black", ls="--", lw=1.2, alpha=0.8, label="lower splice")
+        axes[0].legend(frameon=False)
+    axes[0].set_xlabel("z")
+    axes[0].set_ylabel("log10 F(z)")
+    axes[0].set_title(f"{title_prefix} lower tail")
+
+    axes[1].plot(z_grid, np.log10(upper), color="crimson", lw=2)
+    if xU is not None:
+        axes[1].axvline(xU, color="black", ls="--", lw=1.2, alpha=0.8, label="upper splice")
+        axes[1].legend(frameon=False)
+    axes[1].set_xlabel("z")
+    axes[1].set_ylabel("log10 (1 - F(z))")
+    axes[1].set_title(f"{title_prefix} upper tail")
+
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+def plot_var_es_timeline(
+    y_true,
+    var_alpha,
+    es_alpha,
+    alpha,
+    side="lower",
+    title_prefix="",
+    out_path="var_es_timeline.png",
+    max_points=3000,
+):
+    y_true = np.asarray(y_true, dtype=np.float64)
+    var_alpha = np.asarray(var_alpha, dtype=np.float64)
+    es_alpha = np.asarray(es_alpha, dtype=np.float64)
+
+    N = len(y_true)
+    if N == 0:
+        return
+
+    if N > max_points:
+        idx = np.linspace(0, N - 1, max_points).astype(int)
+        t = idx
+        y_true = y_true[idx]
+        var_alpha = var_alpha[idx]
+        es_alpha = es_alpha[idx]
+    else:
+        t = np.arange(N)
+
+    fig, ax = plt.subplots(figsize=(12, 4), dpi=200)
+
+    ax.plot(t, y_true, color="black", lw=1.2, alpha=0.8, label="realized y")
+    ax.plot(t, var_alpha, color="cornflowerblue", lw=1.6, label=f"VaR α={alpha:g}")
+    ax.plot(t, es_alpha, color="mediumorchid", lw=1.6, label=f"ES α={alpha:g}")
+
+    if side == "lower":
+        mask = y_true <= var_alpha
+    else:
+        mask = y_true >= var_alpha
+
+    if mask.any():
+        ax.scatter(t[mask], y_true[mask], s=14, color="crimson", zorder=4, label="tail exceedance")
+
+    ax.set_xlabel("test sample index")
+    ax.set_ylabel("value")
+    ax.set_title(f"{title_prefix} VaR / ES timeline ({side}, α={alpha:g})")
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+def plot_es_diagnostics(
+    y_true,
+    var_pred,
+    es_pred,
+    alphas,
+    side="lower",
+    title_prefix="",
+    out_path="es_diagnostics.png",
+    log_x=True,
+):
+    """
+    Two-panel ES diagnostic:
+      1) VaR coverage calibration
+      2) ES calibration on exceedance days
+
+    y_true:   (B,)
+    var_pred: (B,A)
+    es_pred:  (B,A)
+    alphas:   (A,)
+    """
+    y_true = np.asarray(y_true, dtype=np.float64)
+    var_pred = np.asarray(var_pred, dtype=np.float64)
+    es_pred = np.asarray(es_pred, dtype=np.float64)
+    alphas = np.asarray(alphas, dtype=np.float64)
+
+    A = len(alphas)
+    B = len(y_true)
+
+    coverage = np.full(A, np.nan)
+    n_exc = np.zeros(A, dtype=int)
+    realized_tail_mean = np.full(A, np.nan)
+    predicted_es_exc_mean = np.full(A, np.nan)
+    predicted_es_all_mean = np.full(A, np.nan)
+
+    for k, a in enumerate(alphas):
+        if side == "lower":
+            mask = y_true <= var_pred[:, k]
+        elif side == "upper":
+            mask = y_true >= var_pred[:, k]
+        else:
+            raise ValueError("side must be 'lower' or 'upper'")
+
+        coverage[k] = np.mean(mask)
+        n_exc[k] = int(mask.sum())
+        predicted_es_all_mean[k] = np.mean(es_pred[:, k])
+
+        if mask.any():
+            realized_tail_mean[k] = np.mean(y_true[mask])
+            predicted_es_exc_mean[k] = np.mean(es_pred[mask, k])
+
+    coverage_err = coverage - alphas
+    es_bias = predicted_es_exc_mean - realized_tail_mean
+
+    coverage_band = 1.96 * np.sqrt(np.maximum(alphas * (1.0 - alphas), 1e-12) / max(B, 1))
+    cov_lo = np.clip(alphas - coverage_band, 0, 1)
+    cov_hi = np.clip(alphas + coverage_band, 0, 1)
+
+    summary = {
+        "alphas": alphas,
+        "coverage": coverage,
+        "coverage_error": coverage_err,
+        "n_exceed": n_exc,
+        "realized_tail_mean": realized_tail_mean,
+        "predicted_es_exceed_mean": predicted_es_exc_mean,
+        "predicted_es_all_mean": predicted_es_all_mean,
+        "es_bias": es_bias,
+        "coverage_mae": float(np.nanmean(np.abs(coverage_err))),
+        "es_bias_mae": float(np.nanmean(np.abs(es_bias))),
+        "es_bias_mean": float(np.nanmean(es_bias)),
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5), dpi=200)
+
+    # Panel 1: VaR coverage
+    ax = axes[0]
+    ax.plot(alphas, alphas, "k--", lw=1.5, label="ideal")
+    ax.fill_between(alphas, cov_lo, cov_hi, color="gray", alpha=0.18, label="95% ref band")
+    ax.plot(alphas, coverage, marker="o", lw=2, color="royalblue", label="empirical coverage")
+    if log_x:
+        ax.set_xscale("log")
+    ax.set_xlabel("tail probability α")
+    ax.set_ylabel("empirical exceedance probability")
+    ax.set_title(f"{title_prefix} VaR calibration ({side})")
+    ax.legend(frameon=False)
+
+    # Panel 2: ES calibration
+    ax = axes[1]
+    ax.plot(alphas, realized_tail_mean, marker="o", lw=2, color="black", label="realized tail mean")
+    ax.plot(alphas, predicted_es_exc_mean, marker="s", lw=2, color="crimson", label="predicted ES on exceedance days")
+    ax.plot(alphas, predicted_es_all_mean, marker="^", lw=1.5, color="darkorange", alpha=0.85, label="predicted ES (all days)")
+    if log_x:
+        ax.set_xscale("log")
+    ax.set_xlabel("tail probability α")
+    ax.set_ylabel("tail conditional mean")
+    ax.set_title(
+        f"{title_prefix} ES calibration ({side})\n"
+        f"coverage MAE={summary['coverage_mae']:.4f}, ES bias MAE={summary['es_bias_mae']:.4f}"
+    )
+    ax.legend(frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+    return summary
+
+def compute_spliced_var_es_batched(
+    spliced_quantile,
+    params_np,
+    alphas,
+    horizon=0,
+    side="lower",
+    batch_size=256,
+    n_int=256,
+    device="cpu",
+):
+    """
+    Exact VaR / ES for SplicedGPDQuantile.
+
+    params_np: (B,H,P)
+    alphas: list/array of tail probabilities
+
+    returns:
+      var_pred: (B,A)
+      es_pred:  (B,A)
+    """
+    alphas = np.asarray(alphas, dtype=np.float32)
+    B = params_np.shape[0]
+    A = len(alphas)
+
+    var_pred = np.empty((B, A), dtype=np.float32)
+    es_pred = np.empty((B, A), dtype=np.float32)
+
+    alphas_t = torch.tensor(alphas, dtype=torch.float32, device=device)
+    u_eval_t = alphas_t if side == "lower" else (1.0 - alphas_t)
+
+    spliced_quantile.eval()
+
+    with torch.inference_mode():
+        for b0, b1 in _batched_range(B, batch_size):
+            params_t = torch.from_numpy(params_np[b0:b1, horizon:horizon+1]).to(device=device, dtype=torch.float32)  # (b,1,P)
+
+            var_t = spliced_quantile.quantile_at_levels(params_t, u_eval_t)[:, 0, :]  # (b,A)
+            es_t = spliced_quantile.expected_shortfall(
+                params_t, alphas_t, side=side, n_int=n_int
+            )[:, 0, :]  # (b,A)
+
+            var_pred[b0:b1] = var_t.detach().cpu().numpy().astype(np.float32)
+            es_pred[b0:b1] = es_t.detach().cpu().numpy().astype(np.float32)
+
+            del params_t, var_t, es_t
+
+    return var_pred, es_pred
+
+
+
 
 if __name__ == "__main__":
     pass

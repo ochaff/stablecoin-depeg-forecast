@@ -45,7 +45,7 @@ class Dataset_forecast(Dataset) :
                 df = self.scaler.fit_transform(df)
         
         self.data_x = df.values 
-        self.data_y = df['poolTick'].values
+        self.data_y = df['depeg_bps'].values
 
     def __getitem__(self, index):
         
@@ -111,7 +111,7 @@ class Dataset_earlywarning(Dataset) :
         if self.set_type in (0, 1):  # train/val
             self.data_y = df["target"].to_numpy()
         else:             
-            self.data_y = df[["target", "poolTick"]].to_numpy()
+            self.data_y = df[["target", "depeg_bps"]].to_numpy()
         self.data_x = X
 
     def __getitem__(self, index):

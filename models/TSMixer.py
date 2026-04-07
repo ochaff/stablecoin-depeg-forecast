@@ -187,7 +187,7 @@ class TSMixer_forecast(Baseclass_forecast):
                 forecast_task, dist_side, tau_pinball,
                 n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side,
                 twcrps_smooth_h, u_grid_size, dist_loss, grid_density, quantile_decomp, spline_degree, knot_kind, knot_p,
-                tail_model, gdp_u_low, gpd_u_high, gpd_xi_min, gpd_xi_max,
+                tail_model, gpd_u_low, gpd_u_high, gpd_xi_min, gpd_xi_max,
                 **kwargs
                 ):
         super(TSMixer_forecast, self).__init__(
@@ -212,7 +212,7 @@ class TSMixer_forecast(Baseclass_forecast):
             knot_kind=knot_kind,   
             knot_p=knot_p,
             tail_model=tail_model,
-            gdp_u_low=gdp_u_low,
+            gpd_u_low=gpd_u_low,
             gpd_u_high=gpd_u_high,
             gpd_xi_min=gpd_xi_min,
             gpd_xi_max=gpd_xi_max,

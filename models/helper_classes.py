@@ -735,3 +735,146 @@ class SplicedGPDQuantile(nn.Module):
         Alias for tail-aware PIT = F(y).
         """
         return self.cdf_at_y(params, y)
+    
+    def quantile_at_levels(self, params: torch.Tensor, u_eval: torch.Tensor) -> torch.Tensor:
+        """
+        Evaluate the spliced quantile function at arbitrary probability levels.
+
+        params: (B,H,P)
+        u_eval: (A,)
+
+        returns:
+          Q_eval: (B,H,A)
+        """
+        if not torch.is_tensor(u_eval):
+            u_eval = torch.tensor(u_eval, device=params.device, dtype=params.dtype)
+
+        u_eval = u_eval.to(device=params.device, dtype=params.dtype).flatten()
+        u_eval = u_eval.clamp(min=self.eps, max=1.0 - self.eps)
+
+        body_params = params[..., :self.body_param_dim]
+        raw_xi_low = params[..., self.body_param_dim]
+        raw_xi_high = params[..., self.body_param_dim + 1]
+
+        Q_body, q_body, xL, qL, xU, qU, xiL, xiU, betaL, betaU = self._tail_params_from_body(
+            body_params, raw_xi_low, raw_xi_high
+        )
+
+        B, H, _ = Q_body.shape
+        A = u_eval.numel()
+        Q_eval = torch.empty(B, H, A, device=params.device, dtype=params.dtype)
+
+        m_low = u_eval < self.u_low
+        m_mid = (u_eval >= self.u_low) & (u_eval <= self.u_high)
+        m_high = u_eval > self.u_high
+
+        # lower tail
+        if m_low.any():
+            Q_lo, _ = self._lower_tail_quantile(u_eval[m_low], xL, betaL, xiL)
+            Q_eval[..., m_low] = Q_lo
+
+        # middle via interpolation on body grid
+        if m_mid.any():
+            mids = []
+            for ue in u_eval[m_mid]:
+                idx = int(torch.searchsorted(self.u, ue, right=False).item())
+                if idx <= 0:
+                    qv = Q_body[..., 0]
+                elif idx >= self.u.numel():
+                    qv = Q_body[..., -1]
+                else:
+                    ul = self.u[idx - 1]
+                    ur = self.u[idx]
+                    w = (ue - ul) / (ur - ul).clamp_min(self.eps)
+                    qv = (1.0 - w) * Q_body[..., idx - 1] + w * Q_body[..., idx]
+                mids.append(qv)
+            Q_eval[..., m_mid] = torch.stack(mids, dim=-1)
+
+        # upper tail
+        if m_high.any():
+            Q_hi, _ = self._upper_tail_quantile(u_eval[m_high], xU, betaU, xiU)
+            Q_eval[..., m_high] = Q_hi
+
+        return Q_eval
+
+    def expected_shortfall(
+        self,
+        params: torch.Tensor,
+        alphas: torch.Tensor,
+        side: str = "lower",
+        n_int: int = 256,
+        log_grid: bool = True,
+    ) -> torch.Tensor:
+        """
+        Numerical ES from the exact spliced quantile function.
+
+        For lower tail:
+          ES_alpha = (1/alpha) ∫_0^alpha Q(u) du
+
+        For upper tail:
+          ES_alpha = (1/alpha) ∫_{1-alpha}^1 Q(u) du
+
+        params: (B,H,P)
+        alphas: (A,)
+        returns:
+          ES: (B,H,A)
+        """
+        if not torch.is_tensor(alphas):
+            alphas = torch.tensor(alphas, device=params.device, dtype=params.dtype)
+
+        alphas = alphas.to(device=params.device, dtype=params.dtype).flatten()
+        out = []
+
+        for a in alphas:
+            a_val = float(a.item())
+            a_val = max(a_val, self.eps)
+
+            if side == "lower":
+                if log_grid and a_val < 0.2:
+                    u_eval = torch.logspace(
+                        math.log10(self.eps),
+                        math.log10(a_val),
+                        n_int,
+                        device=params.device,
+                        dtype=params.dtype,
+                    )
+                else:
+                    u_eval = torch.linspace(
+                        self.eps,
+                        a_val,
+                        n_int,
+                        device=params.device,
+                        dtype=params.dtype,
+                    )
+
+                Q_eval = self.quantile_at_levels(params, u_eval)   # (B,H,n_int)
+                es = torch.trapz(Q_eval, u_eval, dim=-1) / a_val   # (B,H)
+
+            elif side == "upper":
+                if log_grid and a_val < 0.2:
+                    t = torch.logspace(
+                        math.log10(self.eps),
+                        math.log10(a_val),
+                        n_int,
+                        device=params.device,
+                        dtype=params.dtype,
+                    )
+                    u_eval = 1.0 - torch.flip(t, dims=[0])  # increasing: 1-a ... 1-eps
+                else:
+                    u_eval = torch.linspace(
+                        1.0 - a_val,
+                        1.0 - self.eps,
+                        n_int,
+                        device=params.device,
+                        dtype=params.dtype,
+                    )
+
+                Q_eval = self.quantile_at_levels(params, u_eval)
+                es = torch.trapz(Q_eval, u_eval, dim=-1) / a_val
+
+            else:
+                raise ValueError("side must be 'lower' or 'upper'")
+
+            out.append(es)
+
+        return torch.stack(out, dim=-1)  # (B,H,A)

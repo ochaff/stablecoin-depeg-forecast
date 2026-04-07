@@ -20,8 +20,8 @@ from utils.build_dataset import build_dataset
 from data_loader.DataModules import DataModule_forecast, DataModule_earlywarning
 
 load_dotenv()
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
-CUDA_LAUNCH_BLOCKING=1.
 
 
 if __name__ == "__main__":

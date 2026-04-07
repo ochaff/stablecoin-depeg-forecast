@@ -11,10 +11,13 @@ def add_swap_size_metrics():
     return df_integral
 
 
-def add_forecasting_target():
-    state = pd.read_parquet('./data/Uniswap/hourly_pool_state_full.parquet')
-    state.index = state.hour
-    return state['poolTick'].astype(float)
+def add_forecasting_target(use_log_price = False):
+    state = pd.read_parquet('data/Uniswap/USDC_USDT_hourly_metrics.parquet').query('feeTier == 100')
+    state.index = state.datetime
+    if use_log_price:
+        return np.log1p(state['depeg_bps'] / 10000)  # log price approximation for small depegs
+    else:
+        return state['depeg_bps'].astype(float)
 
 def load_uniswap_metrics():
     metrics1 = pd.read_parquet('./data/Uniswap/USDC_USDT_hourly_metrics.parquet').query('feeTier == 100').sort_values(by='datetime').iloc[:-1,:]
@@ -346,7 +349,7 @@ def build_dataset(
             alpha, aave, aave_liq, crv, eth_price, 
             eth_indicators, btc_price, btc_indicators, usd_index, usd_indicators, fear_greed, gegen, target, 
             target_window, target_threshold, depeg_side, dynamic_threshold,
-            gegen_indicators, swap_size, 
+            gegen_indicators, swap_size, use_log_price,
             bypass = False,
             **kwargs):
         dataset = load_uniswap_metrics()
@@ -448,7 +451,7 @@ def build_dataset(
                 print('--- could not join uniswap swap size curve metrics ---')
         
         try:
-            dataset = dataset.join(add_forecasting_target())
+            dataset = dataset.join(add_forecasting_target(use_log_price), how='left')
         except Exception as e:
             print('--- could not add uniswap active pool price (forecasting target) ---')
             raise e
@@ -456,7 +459,7 @@ def build_dataset(
         if target:
             w = int(target_window)        # hours
             thr = int(target_threshold)   # bps
-            x = dataset["poolTick"].astype(float)      # depeg in bps (can be + or -)
+            x = dataset["depeg_bps"].astype(float)      # depeg in bps (can be + or -)
             upper = x.rolling(30*24, min_periods=1).quantile(0.9975)
             lower = x.rolling(30*24, min_periods=1).quantile(0.0025)
 
@@ -536,6 +539,7 @@ def add_dataset_args(parser):
     dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
     dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
     dataset_building.add_argument('--gegen_indicators',action='store_false', help='remove Gegenbauer liquidity curve time series features')
+    dataset_building.add_argument('--use_log_price', action='store_true', help='use log price for depeg target')
 
     class_target = parser.add_argument_group('classification target arguments')
     class_target.add_argument('-t','--target', action='store_true', help='add binary classification target for depeg event within target window')
