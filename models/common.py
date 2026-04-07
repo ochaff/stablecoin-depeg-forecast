@@ -7,418 +7,23 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import math
+from torch.distributions import Normal
 import pickle as pkl
 from utils.losses import pinball_loss, pinball_loss_expectile
 import tempfile
 import shap
 from pathlib import Path
 from sklearn.metrics import roc_auc_score, average_precision_score, confusion_matrix, roc_curve, precision_recall_curve, auc, average_precision_score
-from models.utils import chebyshev_lobatto_u, uniform_u, chebyshev_basis, cdf_from_quantile_on_grid, _interp_idx_w, ChainingFunction, _ensure_dir, _batched_range, plot_quantile_cdf_pdf, plot_fan_chart, plot_pit_hist, make_open_nonuniform_knots, mspline_ispline_on_grid, logit_u, power_tails_u
-
-
-class RevIN(nn.Module):
-    def __init__(self, num_features: int, eps=1e-5, affine=True, mode = 'revin'):
-        """
-        :param num_features: the number of features or channels
-        :param eps: a value added for numerical stability
-        :param affine: if True, RevIN has learnable affine parameters
-        """
-        super(RevIN, self).__init__()
-        self.num_features = num_features
-        self.eps = eps
-        self.affine = affine
-        if self.affine == 1:
-            self._init_params()
-        self.type = mode
-
-    def forward(self, x, mode:str):
-            if mode == 'norm':
-                self._get_statistics(x)
-                x = self._normalize(x)
-            elif mode == 'denorm':
-                x = self._denormalize(x)
-            elif mode == 'denorm_scale':
-                x = self._denormalize_scale(x)
-            return x
-
-    def _init_params(self):
-        # initialize RevIN params: (C,)
-        self.affine_weight = nn.Parameter(torch.ones(self.num_features))
-        self.affine_bias = nn.Parameter(torch.zeros(self.num_features))
-
-    def _get_statistics(self, x):
-        if self.type == 'revin':
-            dim2reduce = tuple(range(1, x.ndim-1))
-            self.mean = torch.mean(x, dim=1, keepdim=True).detach()
-            self.stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + self.eps).detach()
-            if self.affine :    
-                self.mean = self.mean + self.affine_bias
-                self.stdev = self.stdev * (torch.relu(self.affine_weight) + self.eps)
-        elif self.type == 'robust':
-            dim2reduce = tuple(range(1, x.ndim-1))
-            self.mean = torch.quantile(x, 0.5, dim=1, keepdim=True).detach()
-            self.stdev = (torch.quantile(x, 0.75, dim=1, keepdim=True).detach() - torch.quantile(x, 0.25, dim=1, keepdim=True).detach())
-            self.stdev = self.stdev + self.eps
-            if self.affine :    
-                self.mean = self.mean + self.affine_bias
-                self.stdev = self.stdev * (torch.relu(self.affine_weight) + self.eps)
-    def _normalize(self, x):
-        x = x - self.mean
-        x = x / self.stdev
-        return x
-
-    def _denormalize(self, x):
-        x = x * self.stdev
-        x = x + self.mean
-        return x
-    
-    def _denormalize_scale(self, x, eps = 1e-5):  
-        x = x * self.stdev
-        return x
-    def robust_statistics(self, x, dim=-1, eps=1e-6):
-        return None
-
-
-class BinaryFocalLoss(nn.Module):
-    def __init__(
-        self,
-        alpha: float = 0.25,
-        gamma: float = 2.0,
-        reduction: str = "mean",
-        pos_weight: torch.Tensor | None = None,
-    ):
-        super().__init__()
-        self.alpha = None if alpha is None else float(alpha)
-        self.gamma = float(gamma)
-        self.reduction = reduction
-
-        if pos_weight is not None:
-            # register so it moves with .to(device)
-            self.register_buffer("pos_weight", pos_weight.float())
-        else:
-            self.pos_weight = None
-
-    def forward(self, logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        # logits: (B,) or (B,1), y: {0,1} same shape
-        if logits.ndim > 1:
-            logits = logits.squeeze(-1)
-        if y.ndim > 1:
-            y = y.squeeze(-1)
-
-        y = y.float()
-
-        # BCE term (stable)
-        bce = F.binary_cross_entropy_with_logits(
-            logits, y, reduction="none", pos_weight=self.pos_weight
-        )
-
-        # p_t = p if y=1 else (1-p)
-        p = torch.sigmoid(logits)
-        pt = y * p + (1.0 - y) * (1.0 - p)
-
-        focal_factor = (1.0 - pt).pow(self.gamma)
-
-        if self.alpha is None:
-            alpha_t = 1.0
-        else:
-            alpha_t = y * self.alpha + (1.0 - y) * (1.0 - self.alpha)
-
-        loss = alpha_t * focal_factor * bce
-
-        if self.reduction == "mean":
-            return loss.mean()
-        if self.reduction == "sum":
-            return loss.sum()
-        return loss
-    
-class ShapProbWrapper(nn.Module):
-    """Wraps a model that outputs probabilities so SHAP sees an nn.Module."""
-    def __init__(self, base_model: nn.Module):
-        super().__init__()
-        self.base_model = base_model
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.base_model(x.float())  # already probabilities
-        if out.ndim == 1:
-            out = out.unsqueeze(1)        # (B, 1)
-        elif out.ndim == 2 and out.shape[1] != 1:
-            out = out[:, :1]
-        return out
-
-
-class ChebyshevQuantile(nn.Module):
-    """
-    params -> (Q(u_j), q(u_j)) on a fixed u-grid, monotone by construction.
-    params shape: (B, H, 2+K) = [b, log_s, a_0..a_{K-1}]
-    """
-    def __init__(self, K: int, u_grid: torch.Tensor, eps: float = 1e-6, normalize: bool = True, u0: float = 0.5, revin_type: str = 'revin'):
-        super().__init__()
-        self.K = K
-        self.eps = eps
-        self.normalize = normalize
-        self.u0 = u0
-        self.revin_type = revin_type
-        
-        u_grid = u_grid.contiguous()
-        # buffers move with .to(device)
-        self.register_buffer("u", u_grid)                       # (J,)
-        self.register_buffer("du", u_grid[1:] - u_grid[:-1])    # (J-1,)
-        self.register_buffer("T", chebyshev_basis(u_grid, K))   # (J,K)
-
-        # trapezoid weights on u for ∫_0^1 f(u) du
-        du = self.du
-        wu = torch.zeros_like(u_grid)
-        wu[0] = du[0] / 2
-        wu[-1] = du[-1] / 2
-        wu[1:-1] = (du[:-1] + du[1:]) / 2
-        self.register_buffer("wu", wu)                          # (J,)
-
-
-        i0,  w0  = _interp_idx_w(self.u, 0.5)
-        self.register_buffer("i0",  i0)
-        self.register_buffer("w0",  w0)
-        
-        if self.revin_type == 'robust':
-            i25, w25 = _interp_idx_w(self.u, 0.25)
-            i75, w75 = _interp_idx_w(self.u, 0.75)
-            self.register_buffer("i25", i25)
-            self.register_buffer("w25", w25)
-            self.register_buffer("i75", i75)
-            self.register_buffer("w75", w75)
-
-
-    def forward(self, params: torch.Tensor):
-        """
-        returns:
-          Q: (B,H,J)
-          q: (B,H,J)  (quantile density)
-        """
-        b = params[..., 0]                           # (B,H)
-        s = F.softplus(params[..., 1]) + self.eps     # (B,H)
-        a = params[..., 2:]                          # (B,H,K)
-
-
-        g = torch.einsum("bhk,jk->bhj", a, self.T)    # (B,H,J)
-
-
-        q = F.softplus(g) + self.eps                 # (B,H,J)
-
-        q_mid = 0.5 * (q[..., 1:] + q[..., :-1])     # (B,H,J-1)
-        integ = torch.cumsum(q_mid * self.du, dim=-1) # (B,H,J-1)
-        integ = torch.cat([torch.zeros_like(b)[..., None], integ], dim=-1)  # (B,H,J)
-
-        if self.normalize:
-            def interp(integ, i, w):
-                return (1 - w) * integ[..., i] + w * integ[..., i + 1]  # (B,H)
-
-            i0  = self.i0.item();  w0  = self.w0.item()
-            if self.revin_type == "robust":
-                i25 = self.i25.item(); w25 = self.w25.item()
-                i75 = self.i75.item(); w75 = self.w75.item()
-           
-            Q_u0 = interp(integ, i0, w0)                 # (B,H)
-            Qc = integ - Q_u0[..., None]                 # (B,H,J)
-
-            if self.revin_type == "revin":
-                mu = torch.sum(Qc * self.wu, dim=-1)     # (B,H)
-                m2 = torch.sum((Qc ** 2) * self.wu, dim=-1)
-                var = (m2 - mu ** 2).clamp_min(0.0)
-                alpha = s / torch.sqrt(var + self.eps)   # (B,H)
-
-            elif self.revin_type == "robust":
-                Q25 = interp(integ, i25, w25) - Q_u0     # == interp(Qc, ...)
-                Q75 = interp(integ, i75, w75) - Q_u0
-                iqr = (Q75 - Q25).clamp_min(self.eps)    # (B,H)
-                alpha = s / iqr
-            else:
-                raise ValueError(f"Unknown revin_type: {self.revin_type}")
-
-            Q = b[..., None] + alpha[..., None] * Qc
-            q = alpha[..., None] * q
-        else:
-            Q = b[..., None] + integ
-        return Q, q
- 
-class ISplineQuantile(nn.Module):
-    """
-    params -> (Q(u_j), q(u_j)) on a fixed u-grid, monotone by construction via I-splines.
-
-    params shape: (B, H, 2+K) = [b, log_s, a_0..a_{K-1}]
-      b: location
-      s: scale target (positive after softplus)
-      a_k: nonnegative I-spline coefficients (softplus), guarantee monotone Q(u)
-
-    Outputs:
-      Q: (B,H,J) quantile function on u-grid
-      q: (B,H,J) quantile density dQ/du on u-grid (>= 0)
-    """
-    def __init__(
-        self,
-        K: int,
-        u_grid: torch.Tensor,
-        eps: float = 1e-6,
-        normalize: bool = True,
-        u0: float = 0.5,
-        revin_type: str = "revin",
-        # spline params
-        degree: int = 3,
-        knot_kind: str = "power_tails",
-        knot_p: float = 3.0,
-    ):
-        super().__init__()
-        self.K = int(K)
-        self.degree = int(degree)
-        self.eps = float(eps)
-        self.normalize = bool(normalize)
-        self.u0 = float(u0)
-        self.revin_type = revin_type
-
-        u_grid = u_grid.contiguous()
-        self.register_buffer("u", u_grid)                       # (J,)
-        self.register_buffer("du", u_grid[1:] - u_grid[:-1])    # (J-1,)
-
-        # trapezoid weights on u for ∫_0^1 f(u) du (matches your ChebyshevQuantile)
-        du = self.du
-        wu = torch.zeros_like(u_grid)
-        wu[0] = du[0] / 2
-        wu[-1] = du[-1] / 2
-        wu[1:-1] = (du[:-1] + du[1:]) / 2
-        self.register_buffer("wu", wu)                          # (J,)
-
-        # interp indices for anchoring at u0 (and IQR if robust)
-        i0, w0 = _interp_idx_w(self.u, self.u0)
-        self.register_buffer("i0", i0)
-        self.register_buffer("w0", w0)
-
-        if self.revin_type == "robust":
-            i25, w25 = _interp_idx_w(self.u, 0.25)
-            i75, w75 = _interp_idx_w(self.u, 0.75)
-            self.register_buffer("i25", i25); self.register_buffer("w25", w25)
-            self.register_buffer("i75", i75); self.register_buffer("w75", w75)
-
-        # knots + basis sampled on the u-grid
-        
-        knots = make_open_nonuniform_knots(
-                n_basis=self.K,
-                degree=self.degree,
-                a=0.0, b=1.0,
-                kind=knot_kind,
-                p=knot_p,
-                device=u_grid.device,
-            ).to(dtype=u_grid.dtype, device=u_grid.device)
-       
-        self.register_buffer("knots", knots)
-
-        M, I = mspline_ispline_on_grid(self.u, self.knots, degree=self.degree)  # (J,K), (J,K)
-        self.register_buffer("M", M)  # M-spline basis sampled on grid (for q)
-        self.register_buffer("I", I)  # I-spline basis sampled on grid (for Q)
-
-    def forward(self, params: torch.Tensor):
-        """
-        returns:
-          Q: (B,H,J)
-          q: (B,H,J)  quantile density dQ/du >= 0
-        """
-        b = params[..., 0]                           # (B,H)
-        s = F.softplus(params[..., 1]) + self.eps     # (B,H)
-        a_raw = params[..., 2:]                       # (B,H,K)
-
-        # nonnegative coefficients => monotone Q(u)
-        a = F.softplus(a_raw) + self.eps              # (B,H,K)
-
-        # Q_base(u) = sum_k a_k I_k(u)
-        Q_base = torch.einsum("bhk,jk->bhj", a, self.I)  # (B,H,J)
-
-        # q(u) = dQ/du = sum_k a_k M_k(u)
-        q = torch.einsum("bhk,jk->bhj", a, self.M).clamp_min(self.eps)  # (B,H,J)
-
-        if self.normalize:
-            def interp(x, i, w):
-                i = int(i.item()); w = float(w.item())
-                return (1 - w) * x[..., i] + w * x[..., i + 1]  # (B,H)
-
-            Q_u0 = interp(Q_base, self.i0, self.w0)        # (B,H)
-            Qc = Q_base - Q_u0[..., None]                  # centered at u0
-
-            if self.revin_type == "revin":
-                mu = torch.sum(Qc * self.wu, dim=-1)       # (B,H)
-                m2 = torch.sum((Qc ** 2) * self.wu, dim=-1)
-                var = (m2 - mu ** 2).clamp_min(0.0)
-                alpha = s / torch.sqrt(var + self.eps)     # (B,H)
-
-            elif self.revin_type == "robust":
-                Q25 = interp(Q_base, self.i25, self.w25) - Q_u0
-                Q75 = interp(Q_base, self.i75, self.w75) - Q_u0
-                iqr = (Q75 - Q25).clamp_min(self.eps)
-                alpha = s / iqr
-
-            else:
-                raise ValueError(f"Unknown revin_type: {self.revin_type}")
-
-            Q = b[..., None] + alpha[..., None] * Qc
-            q = alpha[..., None] * q
-        else:
-            Q = b[..., None] + Q_base
-
-        return Q, q
-
-
-class CRPSFromQuantiles(nn.Module):
-    def __init__(self, u: torch.Tensor, wu: torch.Tensor, crps_convention: bool = True):
-        super().__init__()
-        self.register_buffer("u", u)    # (J,)
-        self.register_buffer("wu", wu)  # (J,)
-        self.crps_convention = crps_convention
-
-    def forward(self, Q: torch.Tensor, q:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        # Q: (B,H,J), y: (B,H)
-        u = self.u.view(1, 1, -1)                 # (1,1,J)
-        y_ = y.unsqueeze(-1).repeat(1,1,u.shape[-1])                      # (B,H,J)
-
-        e = y_ - Q    
-        pinball = torch.maximum(u*e, (u-1)*e)                            # (B,H,J)
-
-        loss_bh = torch.sum(pinball * self.wu.view(1, 1, -1), dim=-1)  # (B,H)
-
-        loss = loss_bh.mean()
-        if self.crps_convention:
-            loss = 2.0 * loss                     # so loss equals CRPS (common convention)
-
-        return loss
-
-
-class ThresholdWeightedCRPSFromQuantiles(nn.Module):
-    def __init__(self, u: torch.Tensor, wu: torch.Tensor, crps_convention: bool = True, 
-                threshold_low: float = None, threshold_high: float = None, 
-                side: str = "two_sided", smooth_h: float = 0.0):
-        super().__init__()
-        self.register_buffer("u", u)    # (J,)
-        self.register_buffer("wu", wu)  # (J,)
-        self.crps_convention = crps_convention
-        self.threshold_low = threshold_low
-        self.threshold_high = threshold_high
-        self.side = side
-        self.smooth_h = smooth_h
-        self.chain = ChainingFunction(threshold_low=threshold_low, 
-                                      threshold_high=threshold_high, 
-                                      side=side, 
-                                      smooth_h=smooth_h
-                                      )
-
-    def forward(self, Q: torch.Tensor, q:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        # Q: (B,H,J), y: (B,H)
-        u = self.u.view(1, 1, -1)                 # (1,1,J)
-        y_ = y.unsqueeze(-1).repeat(1,1,u.shape[-1])                      # (B,H,J)
-
-        e = self.chain(y_) - self.chain(Q)    
-        pinball = torch.maximum(u*e, (u-1)*e)                            # (B,H,J)
-
-        loss_bh = torch.sum(pinball * self.wu.view(1, 1, -1), dim=-1)  # (B,H)
-
-        loss = loss_bh.mean()
-        if self.crps_convention:
-            loss = 2.0 * loss                     # so loss equals CRPS (common convention)
-        return loss
+from models.utils import (
+    chebyshev_lobatto_u, uniform_u, cdf_from_quantile_on_grid,
+    _ensure_dir, _batched_range, plot_quantile_cdf_pdf, plot_fan_chart, 
+    plot_pit_hist, logit_u, power_tails_u, plot_pit_ecdf, 
+    plot_tail_exceedance_calibration, plot_tail_exceedance_ratio,
+    plot_pit_hist_from_values, plot_pit_ecdf_from_values, compute_spliced_pit_batched
+    )
+from models.helper_classes import RevIN, ChebyshevQuantile, ISplineQuantile, SplicedGPDQuantile, ShapProbWrapper
+from models.losses import GaussianCRPS, GaussianTWCRPS, CRPSFromQuantiles, ThresholdWeightedCRPSFromQuantiles, BinaryFocalLoss, ChainingFunction
 
 
 class Baseclass_forecast(L.LightningModule):
@@ -427,7 +32,8 @@ class Baseclass_forecast(L.LightningModule):
                 learning_rate, method,
                 forecast_task, dist_side, tau_pinball,
                 n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side, twcrps_smooth_h, u_grid_size, dist_loss, grid_density, revin_type, 
-                quantile_decomp, spline_degree, knot_kind, knot_p,
+                quantile_decomp, spline_degree, knot_kind, knot_p, 
+                tail_model, gpd_u_low, gpd_u_high, gpd_xi_min, gpd_xi_max,
                 cdf_grid_size=512, cdf_grid_min=None, cdf_grid_max=None,
                 **kwargs
                 ):
@@ -445,6 +51,11 @@ class Baseclass_forecast(L.LightningModule):
         self.quantile_decomp = quantile_decomp
         self.spline_degree = spline_degree
         self.knot_kind = knot_kind
+        self.tail_model = tail_model
+        self.gpd_u_low = gpd_u_low
+        self.gpd_u_high = gpd_u_high
+        self.gpd_xi_min = gpd_xi_min
+        self.gpd_xi_max = gpd_xi_max
         self.knot_p = knot_p   
         if self.forecast_task == 'distribution':
             if self.grid_density == 'chebyshev':
@@ -455,15 +66,61 @@ class Baseclass_forecast(L.LightningModule):
                 u = power_tails_u(u_grid_size)
             elif self.grid_density == 'logit':
                 u = logit_u(u_grid_size)
-            if self.quantile_decomp == "chebyshev":    
-                self.quantile = ChebyshevQuantile(K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type)
+
+            # IMPORTANT for spliced tails: do not include exact 0 or 1
+            u = u.float().clamp(min=1e-6, max=1.0 - 1e-6)
+
+            if self.quantile_decomp == "chebyshev":
+                body_quantile = ChebyshevQuantile(
+                    K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type
+                )
             elif self.quantile_decomp == "spline":
-                self.quantile = ISplineQuantile(K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type, degree=self.spline_degree, knot_kind=self.knot_kind, knot_p=self.knot_p)
+                body_quantile = ISplineQuantile(
+                    K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type,
+                    degree=self.spline_degree, knot_kind=self.knot_kind, knot_p=self.knot_p
+                )
+
+            if self.tail_model == "gpd":
+                self.quantile = SplicedGPDQuantile(
+                    body_quantile=body_quantile,
+                    body_param_dim=2 + n_cheb,
+                    u_low=self.gpd_u_low,
+                    u_high=self.gpd_u_high,
+                    xi_min=self.gpd_xi_min,
+                    xi_max=self.gpd_xi_max,
+                    eps=1e-6,
+                )
+            else:
+                self.quantile = body_quantile
+
             if dist_loss == 'crps':
                 self.criterion = CRPSFromQuantiles(self.quantile.u, self.quantile.wu)
             else:
                 self.criterion = ThresholdWeightedCRPSFromQuantiles(
                     u=self.quantile.u, wu=self.quantile.wu,
+                    threshold_low=twcrps_threshold_low,
+                    threshold_high=twcrps_threshold_high,
+                    side=twcrps_side,
+                    smooth_h=twcrps_smooth_h
+                )
+        elif self.forecast_task == "gaussian":
+            if self.grid_density == 'chebyshev':
+                u = chebyshev_lobatto_u(u_grid_size)
+            elif self.grid_density == 'uniform':
+                u = uniform_u(u_grid_size)
+            elif self.grid_density == 'power-tail':
+                u = power_tails_u(u_grid_size)
+            elif self.grid_density == 'logit':
+                u = logit_u(u_grid_size)
+            else:
+                raise ValueError(f"Unknown grid_density: {self.grid_density}")
+            if dist_loss == 'crps':
+                self.criterion = GaussianCRPS(u_grid=u, 
+                                            crps_convention=True
+                )
+            elif dist_loss == 'twcrps':
+                self.criterion = GaussianTWCRPS(
+                    u_grid=u,
                     threshold_low=twcrps_threshold_low,
                     threshold_high=twcrps_threshold_high,
                     side=twcrps_side,
@@ -484,6 +141,8 @@ class Baseclass_forecast(L.LightningModule):
         if self.forecast_task == 'distribution':
             Q, q = self.quantile(outputs)
             loss = self.criterion(Q, q, batch_y)
+        elif self.forecast_task == 'gaussian':
+            loss = self.criterion(outputs, batch_y)
         else:
             loss = self.criterion(outputs, batch_y)
 
@@ -500,6 +159,8 @@ class Baseclass_forecast(L.LightningModule):
         if self.forecast_task == 'distribution':
             Q, q = self.quantile(outputs)
             loss = self.criterion(Q, q, batch_y)
+        elif self.forecast_task == 'gaussian':
+            loss = self.criterion(outputs, batch_y)
         else:
             loss = self.criterion(outputs, batch_y)
 
@@ -515,6 +176,8 @@ class Baseclass_forecast(L.LightningModule):
         if self.forecast_task == 'distribution':
             Q, q = self.quantile(outputs)
             test_loss = self.criterion(Q, q, batch_y)
+        elif self.forecast_task == 'gaussian':
+            test_loss = self.criterion(outputs, batch_y)
         else:
             test_loss = self.criterion(outputs, batch_y)
 
@@ -545,13 +208,12 @@ class Baseclass_forecast(L.LightningModule):
         }
 
         if self.forecast_task == 'distribution':
-            # -------------------------
-            # Basic CPU arrays / shapes
-            # -------------------------
-            params_np = A['pred']                      # (B,H,2+K)
+            params_np = A['pred']                      # (B,H,P)
             y_true = A['true']                         # (B,H)
             B, H, P = params_np.shape
             J = int(self.quantile.u.numel())
+
+            is_spliced_gpd = isinstance(self.quantile, SplicedGPDQuantile)
 
             # Choose a few representative samples (CPU)
             score = np.max(np.abs(y_true), axis=1)
@@ -567,75 +229,133 @@ class Baseclass_forecast(L.LightningModule):
             u_grid = self.quantile.u.detach().cpu().numpy()
             A['u_grid'] = u_grid
 
-            # Pre-allocate CPU storage for Q,q if you want to save them
-            # (If too big, remove these and only keep params.)
+            # Pre-allocate CPU storage for Q,q
             Q_cpu = np.empty((B, H, J), dtype=np.float32)
             q_cpu = np.empty((B, H, J), dtype=np.float32)
+
+            bs = getattr(self.hparams, "test_quantile_batch_size", 128)
+            device = self.device
+            self.quantile.eval()
 
             # -------------------------
             # Chunked quantile eval
             # -------------------------
-            bs = getattr(self.hparams, "test_quantile_batch_size", 128)
-
-            device = self.device
-            self.quantile.eval()
-
             with torch.inference_mode():
                 for b0, b1 in _batched_range(B, bs):
-                    # Move only a chunk to GPU
                     params_t = torch.from_numpy(params_np[b0:b1]).to(device=device, dtype=torch.float32)
+                    Q_t, q_t = self.quantile(params_t)  # works for both plain and spliced models
 
-                    Q_t, q_t = self.quantile(params_t)  # (b1-b0,H,J)
-
-                    # Immediately move to CPU and store
                     Q_cpu[b0:b1] = Q_t.detach().cpu().numpy()
                     q_cpu[b0:b1] = q_t.detach().cpu().numpy()
 
-                    # free GPU chunk tensors ASAP
                     del params_t, Q_t, q_t
 
             A['Q'] = Q_cpu
             A['q'] = q_cpu
 
             # -------------------------
-            # CDF grid: compute only for selected examples (small)
+            # z-grid for CDF/PDF plots
             # -------------------------
-            # grid bounds from true values (CPU)
             y_np = y_true
             zmin = self.cdf_grid_min if self.cdf_grid_min is not None else float(np.nanmin(y_np) - 10.0)
             zmax = self.cdf_grid_max if self.cdf_grid_max is not None else float(np.nanmax(y_np) + 10.0)
             z_grid = np.linspace(zmin, zmax, self.cdf_grid_size, dtype=np.float32)
             A['z_grid'] = z_grid
 
-            # Compute cdf only for plotting indices and (optionally) one horizon
-            # If your plot function uses cdf[i,h0], just compute that.
             h0 = 0
             cdf_sel = {}
-
-            with torch.inference_mode():
-                z_grid_t = torch.from_numpy(z_grid).to(device=device)
-
-                # small tensor for selected indices
-                sel = torch.tensor(idxs, device=device, dtype=torch.long)
-
-                # Move selected Q to GPU only
-                Q_sel_t = torch.from_numpy(Q_cpu[idxs, h0:h0+1]).to(device=device)  # (n,1,J)
-
-                # This call can still broadcast to (n,1,J,Z) internally,
-                # but n is tiny so it won't OOM.
-                Fz_sel_t = cdf_from_quantile_on_grid(Q_sel_t, self.quantile.u, z_grid_t)  # (n,1,Z)
-
-                Fz_sel = Fz_sel_t.detach().cpu().numpy()  # (n,1,Z)
-
-                for k, i in enumerate(idxs):
-                    cdf_sel[int(i)] = Fz_sel[k, 0]  # (Z,)
-
-                del Q_sel_t, Fz_sel_t, z_grid_t
-
-            A['cdf_sel_h0'] = cdf_sel  # dict: sample_id -> cdf(Z,) for horizon h0
+            pdf_sel = {}
 
             # -------------------------
-            # Plotting (CPU)
+            # Selected-example CDF/PDF
+            # -------------------------
+            with torch.inference_mode():
+                z_grid_t = torch.from_numpy(z_grid).to(device=device, dtype=torch.float32)
+
+                if is_spliced_gpd:
+                    # Use analytic tail-aware CDF/PDF
+                    params_sel_t = torch.from_numpy(params_np[idxs, h0:h0+1]).to(device=device, dtype=torch.float32)  # (n,1,P)
+
+                    Fz_sel_t = self.quantile.cdf_on_grid(params_sel_t, z_grid_t)   # (n,1,Z)
+                    fz_sel_t = self.quantile.pdf_on_grid(params_sel_t, z_grid_t)   # (n,1,Z)
+
+                    Fz_sel = Fz_sel_t.detach().cpu().numpy()
+                    fz_sel = fz_sel_t.detach().cpu().numpy()
+
+                    for k, i in enumerate(idxs):
+                        cdf_sel[int(i)] = Fz_sel[k, 0]   # (Z,)
+                        pdf_sel[int(i)] = fz_sel[k, 0]   # (Z,)
+
+                    del params_sel_t, Fz_sel_t, fz_sel_t
+
+                else:
+                    # Original interior-grid CDF approximation
+                    Q_sel_t = torch.from_numpy(Q_cpu[idxs, h0:h0+1]).to(device=device, dtype=torch.float32)  # (n,1,J)
+                    Fz_sel_t = cdf_from_quantile_on_grid(Q_sel_t, self.quantile.u, z_grid_t)  # (n,1,Z)
+                    Fz_sel = Fz_sel_t.detach().cpu().numpy()
+
+                    for k, i in enumerate(idxs):
+                        cdf_sel[int(i)] = Fz_sel[k, 0]
+
+                    del Q_sel_t, Fz_sel_t
+
+                del z_grid_t
+
+            A['cdf_sel_h0'] = cdf_sel
+            if is_spliced_gpd:
+                A['pdf_sel_h0'] = pdf_sel
+
+            # -------------------------
+            # Optional: save splice/tail params for debugging
+            # -------------------------
+            if is_spliced_gpd:
+                tail_info = {
+                    "u_low": self.quantile.u_low,
+                    "u_high": self.quantile.u_high,
+                    "xi_min": self.quantile.xi_min,
+                    "xi_max": self.quantile.xi_max,
+                }
+
+                with torch.inference_mode():
+                    for b0, b1 in _batched_range(B, bs):
+                        params_t = torch.from_numpy(params_np[b0:b1]).to(device=device, dtype=torch.float32)
+
+                        body_params = params_t[..., :self.quantile.body_param_dim]
+                        raw_xi_low = params_t[..., self.quantile.body_param_dim]
+                        raw_xi_high = params_t[..., self.quantile.body_param_dim + 1]
+
+                        _, _, xL, qL, xU, qU, xiL, xiU, betaL, betaU = self.quantile._tail_params_from_body(
+                            body_params, raw_xi_low, raw_xi_high
+                        )
+
+                        if b0 == 0:
+                            xL_all = xL.detach().cpu().numpy()
+                            xU_all = xU.detach().cpu().numpy()
+                            xiL_all = xiL.detach().cpu().numpy()
+                            xiU_all = xiU.detach().cpu().numpy()
+                            betaL_all = betaL.detach().cpu().numpy()
+                            betaU_all = betaU.detach().cpu().numpy()
+                        else:
+                            xL_all = np.concatenate([xL_all, xL.detach().cpu().numpy()], axis=0)
+                            xU_all = np.concatenate([xU_all, xU.detach().cpu().numpy()], axis=0)
+                            xiL_all = np.concatenate([xiL_all, xiL.detach().cpu().numpy()], axis=0)
+                            xiU_all = np.concatenate([xiU_all, xiU.detach().cpu().numpy()], axis=0)
+                            betaL_all = np.concatenate([betaL_all, betaL.detach().cpu().numpy()], axis=0)
+                            betaU_all = np.concatenate([betaU_all, betaU.detach().cpu().numpy()], axis=0)
+
+                        del params_t, body_params, raw_xi_low, raw_xi_high
+                        del xL, qL, xU, qU, xiL, xiU, betaL, betaU
+
+                tail_info["xL"] = xL_all
+                tail_info["xU"] = xU_all
+                tail_info["xiL"] = xiL_all
+                tail_info["xiU"] = xiU_all
+                tail_info["betaL"] = betaL_all
+                tail_info["betaU"] = betaU_all
+                A["gpd_tail_info"] = tail_info
+
+            # -------------------------
+            # Plotting
             # -------------------------
             for i in idxs:
                 prefix = os.path.join(plots_dir, f"s{i}_h{h0}")
@@ -661,9 +381,224 @@ class Baseclass_forecast(L.LightningModule):
                     out_path=os.path.join(plots_dir, f"s{i}_fan.png")
                 )
 
-            # PIT histogram: you can keep your existing function if it only uses Q and y_true
-            # (It should not compute a full z-grid CDF internally.)
-            plot_pit_hist(
+            # -------------------------
+            # PIT / ECDF / tail-calibration diagnostics
+            # -------------------------
+            if is_spliced_gpd:
+                pit_vals = compute_spliced_pit_batched(
+                    spliced_quantile=self.quantile,
+                    params_np=params_np,
+                    y_true_np=y_true,
+                    horizon=0,
+                    batch_size=bs,
+                    device=device,
+                )
+
+                pit_vals, pit_stats = plot_pit_hist_from_values(
+                    pits=pit_vals,
+                    bins=20,
+                    title_prefix="Test set (exact tail-aware)",
+                    out_path=os.path.join(plots_dir, "pit_h0.png"),
+                )
+
+                _, pit_ecdf_stats = plot_pit_ecdf_from_values(
+                    pits=pit_vals,
+                    title_prefix="Test set (exact tail-aware)",
+                    out_path=os.path.join(plots_dir, "pit_ecdf_h0.png"),
+                )
+            else:
+                pit_vals, pit_stats = plot_pit_hist(
+                    u_grid=u_grid,
+                    Q_all=Q_cpu,
+                    y_true=y_true,
+                    horizon=0,
+                    bins=20,
+                    title_prefix="Test set",
+                    out_path=os.path.join(plots_dir, "pit_h0.png")
+                )
+
+                _, pit_ecdf_stats = plot_pit_ecdf(
+                    u_grid=u_grid,
+                    Q_all=Q_cpu,
+                    y_true=y_true,
+                    horizon=0,
+                    title_prefix="Test set",
+                    out_path=os.path.join(plots_dir, "pit_ecdf_h0.png"),
+                )
+
+            tail_summary = plot_tail_exceedance_calibration(
+                u_grid=u_grid,
+                Q_all=Q_cpu,
+                y_true=y_true,
+                horizon=0,
+                alphas=[0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+                title_prefix="Test set",
+                out_path=os.path.join(plots_dir, "tail_exceedance_h0.png"),
+            )
+
+            plot_tail_exceedance_ratio(
+                summary=tail_summary,
+                title_prefix="Test set",
+                out_path=os.path.join(plots_dir, "tail_exceedance_ratio_h0.png"),
+            )
+
+            A["pit_h0"] = pit_vals
+            A["pit_stats_h0"] = pit_stats
+            A["pit_ecdf_stats_h0"] = pit_ecdf_stats
+            A["tail_exceedance_h0"] = tail_summary
+
+        elif self.forecast_task == 'gaussian':
+            # -------------------------
+            # Basic CPU arrays / shapes
+            # -------------------------
+            params_np = A['pred']                      # (B,H,2) = [mu, raw_scale]
+            y_true = A['true']                         # (B,H)
+            B, H, P = params_np.shape
+            assert P == 2, f"Gaussian mode expects output shape (B,H,2), got last dim={P}"
+
+            # representative samples, same policy as distribution branch
+            score = np.max(np.abs(y_true), axis=1)
+            topk = np.argsort(-score)[:3]
+            randk = np.random.choice(np.arange(B), size=min(2, B), replace=False)
+            idxs = list(dict.fromkeys(list(topk) + list(randk)))  # unique
+
+            thr_low = self.hparams.twcrps_threshold_low
+            thr_high = self.hparams.twcrps_threshold_high
+            side = self.hparams.twcrps_side
+
+            # -------------------------
+            # Build u-grid for quantile plots
+            # -------------------------
+            if self.grid_density == 'chebyshev':
+                u = chebyshev_lobatto_u(self.hparams.u_grid_size)
+            elif self.grid_density == 'uniform':
+                u = uniform_u(self.hparams.u_grid_size)
+            elif self.grid_density == 'power-tail':
+                u = power_tails_u(self.hparams.u_grid_size)
+            elif self.grid_density == 'logit':
+                u = logit_u(self.hparams.u_grid_size)
+            else:
+                raise ValueError(f"Unknown grid_density: {self.grid_density}")
+
+            # Gaussian quantile / quantile-density explode at exact 0 and 1,
+            # so clamp to an open interval.
+            eps = float(getattr(self, "gaussian_eps", 1e-6))
+            u = u.float().clamp(min=eps, max=1.0 - eps).contiguous()
+            u_grid = u.detach().cpu().numpy()  # (J,)
+            A['u_grid'] = u.detach().cpu().numpy()
+            J = int(u.numel())
+
+            # -------------------------
+            # Decode mu, sigma
+            # -------------------------
+            mu_np = params_np[..., 0].astype(np.float32)  # (B,H)
+            sigma_np = params_np[..., 1].astype(np.float32)
+
+
+            A['mu'] = mu_np
+            A['sigma'] = sigma_np
+
+            # -------------------------
+            # Precompute standard-normal objects on u-grid
+            # -------------------------
+            # z_u = Phi^{-1}(u), phi(z_u) = standard-normal pdf at z_u
+            normal = Normal(
+                loc=torch.tensor(0.0, dtype=u.dtype, device=u.device),
+                scale=torch.tensor(1.0, dtype=u.dtype, device=u.device),
+            )
+
+            z_u = normal.icdf(u)  # (J,)
+            phi_z_u = torch.exp(-0.5 * z_u**2) / math.sqrt(2.0 * math.pi)  # (J,)
+
+            # q(u) = dQ/du = sigma / phi(Phi^{-1}(u))
+            denom_q = phi_z_u.clamp_min(eps)
+
+            # -------------------------
+            # Compute Q(u), q(u) in chunks
+            # -------------------------
+            Q_cpu = np.empty((B, H, J), dtype=np.float32)
+            q_cpu = np.empty((B, H, J), dtype=np.float32)
+
+            bs = getattr(self.hparams, "test_quantile_batch_size", 128)
+
+            with torch.inference_mode():
+                for b0, b1 in _batched_range(B, bs):
+                    mu_t = torch.from_numpy(mu_np[b0:b1]).float()        # (b,H)
+                    sigma_t = torch.from_numpy(sigma_np[b0:b1]).float()  # (b,H)
+
+                    Q_t = mu_t.unsqueeze(-1) + sigma_t.unsqueeze(-1) * z_u.view(1, 1, -1)   # (b,H,J)
+                    q_t = sigma_t.unsqueeze(-1) / denom_q.view(1, 1, -1)                     # (b,H,J)
+
+                    Q_cpu[b0:b1] = Q_t.detach().cpu().numpy().astype(np.float32)
+                    q_cpu[b0:b1] = q_t.detach().cpu().numpy().astype(np.float32)
+
+                    del mu_t, sigma_t, Q_t, q_t
+
+            A['Q'] = Q_cpu
+            A['q'] = q_cpu
+
+            # -------------------------
+            # z-grid for CDF/PDF plots
+            # -------------------------
+            zmin = self.cdf_grid_min if self.cdf_grid_min is not None else float(np.nanmin(y_true) - 10.0)
+            zmax = self.cdf_grid_max if self.cdf_grid_max is not None else float(np.nanmax(y_true) + 10.0)
+            z_grid = np.linspace(zmin, zmax, self.cdf_grid_size, dtype=np.float32)
+            A['z_grid'] = z_grid
+
+            # selected CDF/PDF only for plotting
+            h0 = 0
+            cdf_sel = {}
+            pdf_sel = {}
+
+            z_grid_t = torch.from_numpy(z_grid).float()
+            sqrt_2 = math.sqrt(2.0)
+            sqrt_2pi = math.sqrt(2.0 * math.pi)
+
+            with torch.inference_mode():
+                for i in idxs:
+                    mu_i = torch.tensor(mu_np[i, h0], dtype=torch.float32)
+                    sigma_i = torch.tensor(sigma_np[i, h0], dtype=torch.float32)
+
+                    zz = (z_grid_t - mu_i) / sigma_i
+                    cdf_i = 0.5 * (1.0 + torch.erf(zz / sqrt_2))
+                    pdf_i = torch.exp(-0.5 * zz**2) / (sigma_i * sqrt_2pi)
+
+                    cdf_sel[int(i)] = cdf_i.detach().cpu().numpy().astype(np.float32)
+                    pdf_sel[int(i)] = pdf_i.detach().cpu().numpy().astype(np.float32)
+
+                    del mu_i, sigma_i, zz, cdf_i, pdf_i
+
+            A['cdf_sel_h0'] = cdf_sel
+            A['pdf_sel_h0'] = pdf_sel
+
+            # -------------------------
+            # Plotting, same artifacts as distribution branch
+            # -------------------------
+            for i in idxs:
+                prefix = os.path.join(plots_dir, f"s{i}_h{h0}")
+                title = f"sample {i}, h={h0}"
+
+                plot_quantile_cdf_pdf(
+                    u_grid=A['u_grid'],                   # (J,)
+                    Q_i_h=Q_cpu[i, h0],                  # (J,)
+                    q_i_h=q_cpu[i, h0],                  # (J,)
+                    z_grid=z_grid,                       # (Z,)
+                    cdf_i_h=cdf_sel[int(i)],             # (Z,)
+                    thr_low=thr_low, thr_high=thr_high, side=side,
+                    title_prefix=title,
+                    out_path_prefix=prefix
+                )
+
+                plot_fan_chart(
+                    u_grid=A['u_grid'],
+                    Q_i_allH=Q_cpu[i],                   # (H,J)
+                    y_true_i_allH=y_true[i],             # (H,)
+                    thr_low=thr_low, thr_high=thr_high, side=side,
+                    title_prefix=f"sample {i}",
+                    out_path=os.path.join(plots_dir, f"s{i}_fan.png")
+                )
+
+            pit_vals, pit_stats = plot_pit_hist(
                 u_grid=u_grid,
                 Q_all=Q_cpu,
                 y_true=y_true,
@@ -672,6 +607,35 @@ class Baseclass_forecast(L.LightningModule):
                 title_prefix="Test set",
                 out_path=os.path.join(plots_dir, "pit_h0.png")
             )
+            pit_vals, pit_ecdf_stats = plot_pit_ecdf(
+                u_grid=u_grid,
+                Q_all=Q_cpu,
+                y_true=y_true,
+                horizon=0,
+                title_prefix="Test set",
+                out_path=os.path.join(plots_dir, "pit_ecdf_h0.png"),
+            )
+
+            tail_summary = plot_tail_exceedance_calibration(
+                u_grid=u_grid,
+                Q_all=Q_cpu,
+                y_true=y_true,
+                horizon=0,
+                alphas=[0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+                title_prefix="Test set",
+                out_path=os.path.join(plots_dir, "tail_exceedance_h0.png"),
+            )
+
+            plot_tail_exceedance_ratio(
+                summary=tail_summary,
+                title_prefix="Test set",
+                out_path=os.path.join(plots_dir, "tail_exceedance_ratio_h0.png"),
+            )
+
+            A["pit_ecdf_stats_h0"] = pit_ecdf_stats
+            A["tail_exceedance_h0"] = tail_summary
+            A["pit_h0"] = pit_vals
+            A["pit_stats_h0"] = pit_stats
 
         # ---- save pickle ----
         out_path = os.path.join(run_dir, "preds_test_set.pkl")
@@ -710,22 +674,32 @@ class Baseclass_forecast(L.LightningModule):
     @staticmethod
     def add_task_specific_args(parent_parser):
         class_parser = parent_parser.add_argument_group('Base class arguments')
-        class_parser.add_argument('--forecast_task', type=str, default = 'quantile', choices=['quantile', 'point', 'expectile', 'distribution'], help='quantile, expectile or point forecasting')
+        class_parser.add_argument('--forecast_task', type=str, default = 'quantile', choices=['quantile', 'point', 'expectile', 'distribution', 'gaussian'], help='quantile, expectile or point forecasting')
         class_parser.add_argument('--dist_side', type=str, default='both', choices=['both', 'up', 'down'], help='side of the distribution to be predicted (for quantile/expectile forecasting)')
-        class_parser.add_argument('--tau_pinball', type=float, help='tau parameter for pinball loss (quantile/expectile regression)', default=0.05)
-        class_parser.add_argument('--n_cheb', type=int, default=2, help='number of Chebyshev polynomials for distribution forecasting')
+
+        loss_parser = parent_parser.add_argument_group('Training loss arguments')
+        loss_parser.add_argument('--dist_loss', type=str, default='twcrps', choices=['crps','twcrps'], help='which distributional loss to use for distribution forecasting')
+        loss_parser.add_argument('--twcrps_threshold_low', type=float, default=-10.0, help='lower threshold for twCRPS loss (for price target)')
+        loss_parser.add_argument('--twcrps_threshold_high', type=float, default=10.0, help='upper threshold for twCRPS loss (for price target)')
+        loss_parser.add_argument('--twcrps_side', type=str, default='two_sided', choices=['below','above', 'two_sided'], help='side of the distribution to consider for twCRPS loss')
+        loss_parser.add_argument('--twcrps_smooth_h', type=float, default=2, help='smoothing parameter for twCRPS loss')
+        loss_parser.add_argument('--tau_pinball', type=float, help='tau parameter for pinball loss (quantile/expectile regression)', default=0.05)
         
-        class_parser.add_argument('--dist_loss', type=str, default='twcrps', choices=['crps','twcrps'])
-        class_parser.add_argument('--twcrps_threshold_low', type=float, default=-10.0)  # for price target
-        class_parser.add_argument('--twcrps_threshold_high', type=float, default=10.0)  # for price target
-        class_parser.add_argument('--twcrps_side', type=str, default='two_sided', choices=['below','above', 'two_sided'])
-        class_parser.add_argument('--twcrps_smooth_h', type=float, default=2)
-        class_parser.add_argument('--u_grid_size', type=int, default=128, help='number of points in the Chebyshev grid for distribution forecasting')
-        class_parser.add_argument('--grid_density', type=str, default='uniform', choices=['chebyshev', 'uniform', 'logit', 'power-tail'], help='type of grid for distribution forecasting')
-        class_parser.add_argument('--quantile_decomp', type=str, default='chebyshev', choices=['chebyshev', 'spline'], help='type of quantile decomposition for distribution forecasting')
-        class_parser.add_argument('--spline_degree', type=int, default=3, help='degree of I-spline basis (if quantile_decomp is spline)')
-        class_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power_tails', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)')
-        class_parser.add_argument('--knot_p', type=float, default=3.0, help='power parameter for power-tail knot placement (if quantile_decomp is spline and knot_kind is power_tails)')
+        distribution_parser = parent_parser.add_argument_group('Non parametric quantile function arguments (for distribution forecasting)')
+        distribution_parser.add_argument('--u_grid_size', type=int, default=128, help='number of points in the Chebyshev grid for distribution forecasting')
+        distribution_parser.add_argument('--grid_density', type=str, default='uniform', choices=['chebyshev', 'uniform', 'logit', 'power-tail'], help='type of grid for distribution forecasting')
+        distribution_parser.add_argument('--quantile_decomp', type=str, default='chebyshev', choices=['chebyshev', 'spline'], help='type of quantile decomposition for distribution forecasting')
+        distribution_parser.add_argument('--spline_degree', type=int, default=3, help='degree of I-spline basis (if quantile_decomp is spline)')
+        distribution_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power_tails', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)')
+        distribution_parser.add_argument('--knot_p', type=float, default=3.0, help='power parameter for power-tail knot placement (if quantile_decomp is spline and knot_kind is power_tails)')
+        distribution_parser.add_argument('--n_cheb', type=int, default=2, help='number of Chebyshev polynomials for distribution forecasting')
+        
+        tail_parser = parent_parser.add_argument_group('Spliced tail model arguments (for distribution forecasting)')
+        tail_parser.add_argument('--tail_model', type=str, default='none', choices=['none', 'gpd'], help='whether to use a spliced tail model for distribution forecasting; if gpd, splice a GPD tail model onto the interior quantile function')
+        tail_parser.add_argument('--gpd_u_low', type=float, default=0.01, help='lower splice point for GPD tail model (as quantile level)')
+        tail_parser.add_argument('--gpd_u_high', type=float, default=0.99, help='upper splice point for GPD tail model (as quantile level)')
+        tail_parser.add_argument('--gpd_xi_min', type=float, default=-0.25, help='minimum shape parameter for GPD tail model')
+        tail_parser.add_argument('--gpd_xi_max', type=float, default=0.50, help='maximum shape parameter for GPD tail model')
         return parent_parser
 
 

@@ -88,7 +88,7 @@ class Model(nn.Module):
     def __init__(self, seq_len, pred_len, d_model, dropout, n_layers,
                 method, forecast_task = None, dist_side = None,
                 enc_in = None,
-                affine = True, revin_type = 'revin', n_cheb =2):
+                affine = True, revin_type = 'revin', n_cheb =2, tail_model = 'none'):
         super(Model, self).__init__()
         self.n_layers = n_layers
         self.enc_in = enc_in
@@ -98,6 +98,7 @@ class Model(nn.Module):
         self.revin = RevIN(self.enc_in, affine = affine, mode=revin_type)
         self.std_activ = nn.Softplus()
         self.forecast_task = forecast_task
+        self.tail_model = tail_model
         mixing_layers = [
             MixingLayer(
                 n_series=self.enc_in, input_size=self.seq_len, dropout=dropout, ff_dim=d_model
@@ -110,8 +111,13 @@ class Model(nn.Module):
             self.projection = nn.Linear(self.seq_len, self.pred_len * 2)
         elif (dist_side in ['up', 'down'] and forecast_task in ['quantile', 'expectile']) or forecast_task == 'point':
             self.projection = nn.Linear(self.seq_len, self.pred_len)
-        elif forecast_task == 'distribution':
+        elif forecast_task == 'distribution' and tail_model == "none":
             self.projection = nn.Linear(self.seq_len, self.pred_len * (2+n_cheb))
+        elif forecast_task == 'distribution' and tail_model == "gpd":
+            self.projection = nn.Linear(self.seq_len, self.pred_len * (4+n_cheb))
+        elif forecast_task == 'gaussian':
+            self.projection = nn.Linear(self.seq_len, self.pred_len * 2)
+        
         self.classify_time = nn.Linear(seq_len, 1)
         self.classify_features = nn.Linear(enc_in, 1)
 
@@ -121,17 +127,32 @@ class Model(nn.Module):
         x_enc = self.mixing_layers(x_enc)
         if self.forecast_task == "distribution":
             enc_out = self.projection(x_enc.transpose(1, 2)).transpose(1, 2)
-            dec_out, std_out, cheb_out = torch.split(enc_out, [self.pred_len, self.pred_len, self.pred_len * self.n_cheb], dim=-2)
+            if self.tail_model == "gpd":
+                dec_out, std_out, cheb_out = torch.split(enc_out, [self.pred_len, self.pred_len, self.pred_len * (self.n_cheb + 2)], dim=-2)
+                dec_out = self.revin(dec_out, 'denorm')
+                std_out = self.revin(std_out, 'denorm_scale')
+                dec_out = dec_out[:,:,-1]
+                std_out = std_out[:,:,-1]
+                cheb_out = cheb_out[:,:,-1].view(cheb_out.shape[0], self.pred_len, self.n_cheb + 2)
+            elif self.tail_model == "none":
+                dec_out, std_out, cheb_out = torch.split(enc_out, [self.pred_len, self.pred_len, self.pred_len * self.n_cheb], dim=-2)
+                dec_out = self.revin(dec_out, 'denorm')
+                std_out = self.revin(std_out, 'denorm_scale')
+                dec_out = dec_out[:,:,-1]
+                std_out = std_out[:,:,-1]
+                cheb_out = cheb_out[:,:,-1].view(cheb_out.shape[0], self.pred_len, self.n_cheb)
+
+            std_out = self.std_activ(std_out)
+            dec_out = torch.cat([dec_out.unsqueeze(-1), std_out.unsqueeze(-1), cheb_out], dim= -1)
+        elif self.forecast_task == "gaussian":
+            enc_out = self.projection(x_enc.transpose(1, 2)).transpose(1, 2)
+            dec_out, std_out = torch.split(enc_out, [self.pred_len, self.pred_len], dim=-2)
             dec_out = self.revin(dec_out, 'denorm')
             std_out = self.revin(std_out, 'denorm_scale')
             dec_out = dec_out[:,:,-1]
             std_out = std_out[:,:,-1]
-            cheb_out = cheb_out[:,:,-1].view(cheb_out.shape[0], self.pred_len, self.n_cheb)
-
             std_out = self.std_activ(std_out)
-            # print('dec_out: ', dec_out)
-            # print('cheb_out: ', cheb_out)
-            dec_out = torch.cat([dec_out.unsqueeze(-1), std_out.unsqueeze(-1), cheb_out], dim= -1)
+            dec_out = torch.cat([dec_out.unsqueeze(-1), std_out.unsqueeze(-1)], dim= -1)
         else:
             enc_out = self.projection(x_enc.transpose(1, 2)).transpose(1, 2)
             dec_out = self.revin(enc_out, 'denorm')
@@ -166,6 +187,7 @@ class TSMixer_forecast(Baseclass_forecast):
                 forecast_task, dist_side, tau_pinball,
                 n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side,
                 twcrps_smooth_h, u_grid_size, dist_loss, grid_density, quantile_decomp, spline_degree, knot_kind, knot_p,
+                tail_model, gdp_u_low, gpd_u_high, gpd_xi_min, gpd_xi_max,
                 **kwargs
                 ):
         super(TSMixer_forecast, self).__init__(
@@ -189,9 +211,14 @@ class TSMixer_forecast(Baseclass_forecast):
             spline_degree=spline_degree,
             knot_kind=knot_kind,   
             knot_p=knot_p,
+            tail_model=tail_model,
+            gdp_u_low=gdp_u_low,
+            gpd_u_high=gpd_u_high,
+            gpd_xi_min=gpd_xi_min,
+            gpd_xi_max=gpd_xi_max,
         )
         self.model = Model(seq_len, pred_len, d_model, dropout, n_layers, method, forecast_task, dist_side, 
-                           enc_in, affine, revin_type, n_cheb,
+                           enc_in, affine, revin_type, n_cheb, tail_model
                            )
         self.save_hyperparameters()
 

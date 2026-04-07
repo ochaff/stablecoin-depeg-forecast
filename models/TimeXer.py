@@ -39,13 +39,11 @@ class EnEmbedding(nn.Module):
         # do patching
         n_vars = x.shape[1]
         glb = self.glb_token.repeat((x.shape[0], 1, 1, 1))
-        # print(glb.shape)
         x = x.unfold(dimension=-1, size=self.patch_len, step=self.patch_len)
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
         # Input encoding
         x = self.value_embedding(x) + self.position_embedding(x)
         x = torch.reshape(x, (-1, n_vars, x.shape[-2], x.shape[-1]))
-        # print(x.shape)
         x = torch.cat([x, glb], dim=2)
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
         return self.dropout(x), n_vars
@@ -124,7 +122,7 @@ class Model(nn.Module):
         self.pred_len = pred_len
         self.patch_len = patch_len
         self.patch_num = int(seq_len // patch_len)
-        self.n_vars = enc_in
+        self.n_vars = 1
         self.forecast_task = forecast_task
         self.dist_side = dist_side
         self.n_cheb = n_cheb
@@ -168,6 +166,9 @@ class Model(nn.Module):
         elif forecast_task == 'distribution' :
             self.head = FlattenHead(enc_in, self.head_nf, pred_len * (2+n_cheb),
                                     head_dropout= dropout)
+        elif forecast_task == 'gaussian' :
+            self.head = FlattenHead(enc_in, self.head_nf, pred_len * 2,
+                                    head_dropout= dropout)
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         x_enc = self.revin(x_enc, mode='norm')
@@ -193,13 +194,21 @@ class Model(nn.Module):
 
             std_out = self.std_activ(std_out)
             dec_out = torch.cat([dec_out.unsqueeze(-1), std_out.unsqueeze(-1), cheb_out], dim= -1)
+        elif self.forecast_task == "gaussian":
+            dec_out, std_out = torch.split(enc_out, [self.pred_len, self.pred_len], dim=-2)
+            dec_out = self.revin(dec_out, 'denorm')
+            std_out = self.revin(std_out, 'denorm_scale')
+            dec_out = dec_out[:,:,-1]
+            std_out = std_out[:,:,-1]
+            std_out = self.std_activ(std_out)
+            dec_out = torch.cat([dec_out.unsqueeze(-1), std_out.unsqueeze(-1)], dim= -1)
         else:
             dec_out = self.revin(enc_out, 'denorm')
             dec_out = dec_out[:,:,-1]
         return dec_out
 
-    def forward(self, x_enc, x_exo, x_mark_enc = None, x_dec = None, x_mark_dec = None, mask=None):   
-        dec_out = self.forecast(x_enc, x_exo, x_mark_enc, x_dec, x_mark_dec)
+    def forward(self, x_enc, x_mark_enc = None, x_dec = None, x_mark_dec = None, mask=None):   
+        dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
         return dec_out
     
 

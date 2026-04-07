@@ -4,6 +4,7 @@ import os
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.stats import kstest, cramervonmises
 
 
 def make_open_knots_from_internal(internal: torch.Tensor, degree: int, a=0.0, b=1.0):
@@ -335,103 +336,591 @@ def plot_fan_chart(u_grid, Q_i_allH, y_true_i_allH,
     plt.savefig(out_path, dpi=200, transparent=True, bbox_inches="tight")
     plt.close()
 
+def plot_pit_ecdf(
+    u_grid,
+    Q_all,
+    y_true,
+    horizon=0,
+    title_prefix="",
+    out_path="pit_ecdf.png",
+):
+    """
+    Plot PIT ECDF against Uniform(0,1) reference.
 
-def plot_pit_hist(u_grid, Q_all, y_true, horizon=0, bins=20,
-                  title_prefix="", out_path="pit.png"):
+    Parameters
+    ----------
+    u_grid : (J,)
+    Q_all  : (B,H,J)
+    y_true : (B,H)
+    horizon : int
+    title_prefix : str
+    out_path : str
+
+    Returns
+    -------
+    pits : np.ndarray
+    stats : dict
     """
-    PIT for a fixed horizon: PIT = F(y). We approximate via inverting Q:
-      PIT = interp(y, Q(u), u)
-    Q_all:  (B,H,J)
-    y_true: (B,H)
-    """
-    u_grid = np.asarray(u_grid)
-    Q_h = Q_all[:, horizon, :]      # (B,J)
-    y_h = y_true[:, horizon]        # (B,)
+
+    u_grid = np.asarray(u_grid, dtype=np.float64)
+    Q_all = np.asarray(Q_all, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float64)
+
+    Q_h = Q_all[:, horizon, :]
+    y_h = y_true[:, horizon]
 
     pits = []
     for i in range(Q_h.shape[0]):
-        Qi = Q_h[i]
-        yi = y_h[i]
-        # clip to support to avoid NaNs
+        Qi = np.maximum.accumulate(Q_h[i])
+        yi = float(y_h[i])
+
+        if yi <= Qi[0]:
+            pit = float(u_grid[0])
+        elif yi >= Qi[-1]:
+            pit = float(u_grid[-1])
+        else:
+            pit = float(np.interp(yi, Qi, u_grid))
+        pits.append(pit)
+
+    pits = np.asarray(pits, dtype=np.float64)
+    pits = pits[np.isfinite(pits)]
+    pits = np.clip(pits, 0.0, 1.0)
+
+    N = len(pits)
+    stats = {"n": int(N), "ks_stat": np.nan, "ks_pvalue": np.nan}
+
+    if N == 0:
+        return pits, stats
+
+    pits_sorted = np.sort(pits)
+    ecdf = np.arange(1, N + 1) / N
+
+
+    try:
+        ks = kstest(pits, "uniform")
+        stats["ks_stat"] = float(ks.statistic)
+        stats["ks_pvalue"] = float(ks.pvalue)
+    except Exception:
+        pass
+
+    # Approx 95% KS band
+    band = 1.36 / np.sqrt(N)
+    uu = np.linspace(0, 1, 500)
+    lo = np.clip(uu - band, 0, 1)
+    hi = np.clip(uu + band, 0, 1)
+
+    fig, ax = plt.subplots(figsize=(5, 5), dpi=200)
+
+    ax.plot(uu, uu, "k--", lw=1.5, label="uniform")
+    ax.fill_between(uu, lo, hi, color="gray", alpha=0.18, label="95% KS band")
+    ax.step(pits_sorted, ecdf, where="post", color="royalblue", lw=2, label="PIT ECDF")
+
+    title = f"{title_prefix} PIT ECDF (h={horizon})"
+    if np.isfinite(stats["ks_stat"]):
+        title += f"\nKS={stats['ks_stat']:.3f}, p={stats['ks_pvalue']:.3g}"
+
+    ax.set_title(title)
+    ax.set_xlabel("u")
+    ax.set_ylabel("ECDF of PIT")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+    return pits, stats
+
+def plot_tail_exceedance_calibration(
+    u_grid,
+    Q_all,
+    y_true,
+    horizon=0,
+    alphas=None,
+    title_prefix="",
+    out_path="tail_exceedance_calibration.png",
+    log_x=True,
+):
+    """
+    Tail calibration plot using exceedance frequencies.
+
+    For each alpha:
+      lower tail target: P(Y <= Q(alpha)) = alpha
+      upper tail target: P(Y >= Q(1-alpha)) = alpha
+
+    Parameters
+    ----------
+    u_grid : (J,)
+    Q_all  : (B,H,J)
+    y_true : (B,H)
+    horizon : int
+    alphas : sequence of tail probabilities, e.g. [0.005, 0.01, 0.02, 0.05, 0.1]
+    title_prefix : str
+    out_path : str
+    log_x : bool
+
+    Returns
+    -------
+    summary : dict
+        Contains alpha grid and empirical lower/upper exceedance rates.
+    """
+
+    u_grid = np.asarray(u_grid, dtype=np.float64)
+    Q_all = np.asarray(Q_all, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float64)
+
+    if alphas is None:
+        alphas = np.array([0.005, 0.01, 0.02, 0.05, 0.1, 0.2], dtype=np.float64)
+    else:
+        alphas = np.asarray(alphas, dtype=np.float64)
+
+    Q_h = Q_all[:, horizon, :]   # (B,J)
+    y_h = y_true[:, horizon]     # (B,)
+    B = Q_h.shape[0]
+
+    lower_emp = []
+    upper_emp = []
+    lower_se = []
+    upper_se = []
+
+    for alpha in alphas:
+        # skip levels outside represented grid
+        if alpha < u_grid[0] or (1.0 - alpha) > u_grid[-1]:
+            lower_emp.append(np.nan)
+            upper_emp.append(np.nan)
+            lower_se.append(np.nan)
+            upper_se.append(np.nan)
+            continue
+
+        q_low = np.empty(B, dtype=np.float64)
+        q_high = np.empty(B, dtype=np.float64)
+
+        for i in range(B):
+            Qi = np.maximum.accumulate(Q_h[i])
+            q_low[i] = np.interp(alpha, u_grid, Qi)
+            q_high[i] = np.interp(1.0 - alpha, u_grid, Qi)
+
+        emp_low = np.mean(y_h <= q_low)
+        emp_up = np.mean(y_h >= q_high)
+
+        # simple binomial SE under empirical estimate
+        se_low = np.sqrt(max(emp_low * (1.0 - emp_low), 1e-12) / B)
+        se_up = np.sqrt(max(emp_up * (1.0 - emp_up), 1e-12) / B)
+
+        lower_emp.append(emp_low)
+        upper_emp.append(emp_up)
+        lower_se.append(se_low)
+        upper_se.append(se_up)
+
+    lower_emp = np.asarray(lower_emp)
+    upper_emp = np.asarray(upper_emp)
+    lower_se = np.asarray(lower_se)
+    upper_se = np.asarray(upper_se)
+
+    # reference ± 1.96 sqrt(alpha(1-alpha)/B)
+    ref_se = np.sqrt(np.maximum(alphas * (1.0 - alphas), 1e-12) / B)
+    ref_lo = np.clip(alphas - 1.96 * ref_se, 0, 1)
+    ref_hi = np.clip(alphas + 1.96 * ref_se, 0, 1)
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.5), dpi=200)
+
+    valid = np.isfinite(lower_emp)
+    ax.plot(alphas[valid], alphas[valid], "k--", lw=1.5, label="ideal")
+    ax.fill_between(alphas[valid], ref_lo[valid], ref_hi[valid], color="gray", alpha=0.18, label="95% ref band")
+
+    ax.plot(alphas[valid], lower_emp[valid], marker="o", lw=2, color="royalblue", label="lower tail")
+    ax.plot(alphas[valid], upper_emp[valid], marker="s", lw=2, color="crimson", label="upper tail")
+
+    ax.set_xlabel("nominal tail probability α")
+    ax.set_ylabel("empirical exceedance probability")
+    ax.set_title(f"{title_prefix} Tail exceedance calibration (h={horizon})")
+
+    if log_x:
+        ax.set_xscale("log")
+
+    ax.set_ylim(0, max(0.25, np.nanmax([lower_emp, upper_emp, alphas]) * 1.1))
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+    summary = {
+        "n": int(B),
+        "alphas": alphas,
+        "lower_empirical": lower_emp,
+        "upper_empirical": upper_emp,
+        "reference_lo": ref_lo,
+        "reference_hi": ref_hi,
+    }
+    return summary
+
+def plot_tail_exceedance_ratio(
+    summary,
+    title_prefix="",
+    out_path="tail_exceedance_ratio.png",
+    log_x=True,
+):
+
+    alphas = np.asarray(summary["alphas"], dtype=np.float64)
+    lower_emp = np.asarray(summary["lower_empirical"], dtype=np.float64)
+    upper_emp = np.asarray(summary["upper_empirical"], dtype=np.float64)
+
+    lower_ratio = lower_emp / alphas
+    upper_ratio = upper_emp / alphas
+
+    valid = np.isfinite(lower_ratio) & np.isfinite(upper_ratio)
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.5), dpi=200)
+    ax.axhline(1.0, color="k", ls="--", lw=1.5, label="ideal")
+    ax.plot(alphas[valid], lower_ratio[valid], marker="o", lw=2, color="royalblue", label="lower tail")
+    ax.plot(alphas[valid], upper_ratio[valid], marker="s", lw=2, color="crimson", label="upper tail")
+
+    if log_x:
+        ax.set_xscale("log")
+
+    ax.set_xlabel("nominal tail probability α")
+    ax.set_ylabel("empirical / nominal")
+    ax.set_title(f"{title_prefix} Tail exceedance ratio")
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_pit_hist(
+    u_grid,
+    Q_all,
+    y_true,
+    horizon=0,
+    bins=20,
+    title_prefix="",
+    out_path="pit.png",
+):
+    """
+    PIT for a fixed horizon: PIT = F(y). We approximate via inverting Q:
+      PIT = interp(y, Q(u), u)
+
+    Parameters
+    ----------
+    u_grid : array-like, shape (J,)
+        Quantile levels.
+    Q_all : array-like, shape (B,H,J)
+        Quantile forecasts.
+    y_true : array-like, shape (B,H)
+        Realized targets.
+    horizon : int
+        Horizon index.
+    bins : int
+        Number of histogram bins.
+    title_prefix : str
+        Prefix for plot title.
+    out_path : str
+        Path to save figure.
+
+    Returns
+    -------
+    pits : np.ndarray, shape (B,)
+        PIT values.
+    stats : dict
+        Summary diagnostics for PIT uniformity.
+    """
+    u_grid = np.asarray(u_grid, dtype=np.float64)
+    Q_all = np.asarray(Q_all, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float64)
+
+    Q_h = Q_all[:, horizon, :]   # (B,J)
+    y_h = y_true[:, horizon]     # (B,)
+
+    pits = []
+    for i in range(Q_h.shape[0]):
+        Qi = np.asarray(Q_h[i], dtype=np.float64)
+        yi = float(y_h[i])
+
+        # Guard against tiny non-monotonic numerical artifacts
+        Qi = np.maximum.accumulate(Qi)
+
+        # PIT by inversion of Q(u)
+        # If y falls outside the represented quantile grid support,
+        # we map to 0 or 1 as in your original implementation.
         if yi <= Qi[0]:
             pit = 0.0
         elif yi >= Qi[-1]:
             pit = 1.0
         else:
             pit = float(np.interp(yi, Qi, u_grid))
+
         pits.append(pit)
 
-    pits = np.asarray(pits)
+    pits = np.asarray(pits, dtype=np.float64)
+    pits = pits[np.isfinite(pits)]
 
-    plt.figure(figsize=(7,4))
-    plt.hist(pits, bins=bins, range=(0,1), density=True, alpha=0.7, facecolor="cornflowerblue", edgecolor="black")
-    plt.axhline(1.0, color="crimson", lw=1.5, label="uniform density")
-    plt.xlabel("PIT = F(y)")
-    plt.ylabel("density")
-    plt.title(f"{title_prefix} PIT histogram (h={horizon})")
-    plt.legend(ncols = 2, bbox_to_anchor=(0.66, -0.12), frameon = False)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=200, transparent=True, bbox_inches="tight")
-    plt.close()
+    N = len(pits)
+
+    # Summary stats
+    mean_pit = float(np.mean(pits)) if N > 0 else np.nan
+    var_pit = float(np.var(pits)) if N > 0 else np.nan
+
+    stats = {
+        "n": int(N),
+        "pit_mean": mean_pit,
+        "pit_mean_target": 0.5,
+        "pit_var": var_pit,
+        "pit_var_target": 1.0 / 12.0,
+        "ks_stat": np.nan,
+        "ks_pvalue": np.nan,
+        "cvm_stat": np.nan,
+        "cvm_pvalue": np.nan,
+    }
+
+    if N > 0:
+        try:
+            ks = kstest(pits, "uniform")
+            stats["ks_stat"] = float(ks.statistic)
+            stats["ks_pvalue"] = float(ks.pvalue)
+        except Exception:
+            pass
+
+        try:
+            cvm = cramervonmises(pits, "uniform")
+            stats["cvm_stat"] = float(cvm.statistic)
+            stats["cvm_pvalue"] = float(cvm.pvalue)
+        except Exception:
+            pass
+
+    # Histogram with density=True, so the null reference is density = 1
+    fig, ax = plt.subplots(figsize=(7, 4), dpi=200)
+
+    counts, edges, _ = ax.hist(
+        pits,
+        bins=bins,
+        range=(0, 1),
+        density=True,
+        alpha=0.72,
+        facecolor="cornflowerblue",
+        edgecolor="black",
+        linewidth=0.8,
+    )
+
+    # Uniform reference density
+    ax.axhline(1.0, color="crimson", lw=1.5, label="uniform density")
+
+    # 95% reference band under exact uniformity
+    # Count in each bin ~ Binomial(N, p=1/bins)
+    # Convert count band to density band by dividing by N * bin_width
+    if N > 0:
+        p = 1.0 / bins
+        bin_width = 1.0 / bins
+
+        expected_count = N * p
+        std_count = np.sqrt(N * p * (1.0 - p))
+
+        lo_count = max(0.0, expected_count - 1.96 * std_count)
+        hi_count = expected_count + 1.96 * std_count
+
+        lo_density = lo_count / (N * bin_width)
+        hi_density = hi_count / (N * bin_width)
+
+        ax.axhspan(
+            lo_density,
+            hi_density,
+            color="gray",
+            alpha=0.18,
+            label="95% uniform band",
+        )
+
+    # Title with quantitative diagnostics
+    title = (
+        f"{title_prefix} PIT histogram (h={horizon})\n"
+        f"mean={stats['pit_mean']:.3f} (target 0.500), "
+        f"var={stats['pit_var']:.3f} (target {stats['pit_var_target']:.3f})"
+    )
+
+    if np.isfinite(stats["ks_stat"]):
+        title += f"\nKS={stats['ks_stat']:.3f}, p={stats['ks_pvalue']:.3g}"
+    if np.isfinite(stats["cvm_stat"]):
+        title += f", CvM={stats['cvm_stat']:.3f}, p={stats['cvm_pvalue']:.3g}"
+
+    ax.set_xlabel("PIT = F(y)")
+    ax.set_ylabel("density")
+    ax.set_title(title)
+    ax.set_xlim(0, 1)
+
+    ax.legend(ncols=2, bbox_to_anchor=(0.75, -0.12), frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+    return pits, stats
+
+def plot_pit_hist_from_values(
+    pits,
+    bins=20,
+    title_prefix="",
+    out_path="pit.png",
+):
+    pits = np.asarray(pits, dtype=np.float64)
+    pits = pits[np.isfinite(pits)]
+    pits = np.clip(pits, 0.0, 1.0)
+
+    N = len(pits)
+    mean_pit = float(np.mean(pits)) if N > 0 else np.nan
+    var_pit = float(np.var(pits)) if N > 0 else np.nan
+
+    stats = {
+        "n": int(N),
+        "pit_mean": mean_pit,
+        "pit_mean_target": 0.5,
+        "pit_var": var_pit,
+        "pit_var_target": 1.0 / 12.0,
+        "ks_stat": np.nan,
+        "ks_pvalue": np.nan,
+        "cvm_stat": np.nan,
+        "cvm_pvalue": np.nan,
+    }
+
+    if N > 0:
+        try:
+            ks = kstest(pits, "uniform")
+            stats["ks_stat"] = float(ks.statistic)
+            stats["ks_pvalue"] = float(ks.pvalue)
+        except Exception:
+            pass
+
+        try:
+            cvm = cramervonmises(pits, "uniform")
+            stats["cvm_stat"] = float(cvm.statistic)
+            stats["cvm_pvalue"] = float(cvm.pvalue)
+        except Exception:
+            pass
+
+    fig, ax = plt.subplots(figsize=(7, 4), dpi=200)
+
+    ax.hist(
+        pits,
+        bins=bins,
+        range=(0, 1),
+        density=True,
+        alpha=0.72,
+        facecolor="cornflowerblue",
+        edgecolor="black",
+        linewidth=0.8,
+    )
+
+    ax.axhline(1.0, color="crimson", lw=1.5, label="uniform density")
+
+    if N > 0:
+        p = 1.0 / bins
+        bin_width = 1.0 / bins
+        expected_count = N * p
+        std_count = np.sqrt(N * p * (1.0 - p))
+        lo_count = max(0.0, expected_count - 1.96 * std_count)
+        hi_count = expected_count + 1.96 * std_count
+        lo_density = lo_count / (N * bin_width)
+        hi_density = hi_count / (N * bin_width)
+
+        ax.axhspan(lo_density, hi_density, color="gray", alpha=0.18, label="95% uniform band")
+
+    title = (
+        f"{title_prefix} PIT histogram\n"
+        f"mean={stats['pit_mean']:.3f} (target 0.500), "
+        f"var={stats['pit_var']:.3f} (target {stats['pit_var_target']:.3f})"
+    )
+    if np.isfinite(stats["ks_stat"]):
+        title += f"\nKS={stats['ks_stat']:.3f}, p={stats['ks_pvalue']:.3g}"
+    if np.isfinite(stats["cvm_stat"]):
+        title += f", CvM={stats['cvm_stat']:.3f}, p={stats['cvm_pvalue']:.3g}"
+
+    ax.set_xlabel("PIT = F(y)")
+    ax.set_ylabel("density")
+    ax.set_title(title)
+    ax.set_xlim(0, 1)
+    ax.legend(ncols=2, bbox_to_anchor=(0.75, -0.12), frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+    return pits, stats
+
+def plot_pit_ecdf_from_values(
+    pits,
+    title_prefix="",
+    out_path="pit_ecdf.png",
+):
+    pits = np.asarray(pits, dtype=np.float64)
+    pits = pits[np.isfinite(pits)]
+    pits = np.clip(pits, 0.0, 1.0)
+
+    N = len(pits)
+    stats = {"n": int(N), "ks_stat": np.nan, "ks_pvalue": np.nan}
+
+    if N == 0:
+        return pits, stats
+
+    pits_sorted = np.sort(pits)
+    ecdf = np.arange(1, N + 1) / N
 
 
+    try:
+        ks = kstest(pits, "uniform")
+        stats["ks_stat"] = float(ks.statistic)
+        stats["ks_pvalue"] = float(ks.pvalue)
+    except Exception:
+        pass
 
+    band = 1.36 / np.sqrt(N)
+    uu = np.linspace(0, 1, 500)
+    lo = np.clip(uu - band, 0, 1)
+    hi = np.clip(uu + band, 0, 1)
 
-class ChainingFunction(nn.Module):
+    fig, ax = plt.subplots(figsize=(5, 5), dpi=200)
+    ax.plot(uu, uu, "k--", lw=1.5, label="uniform")
+    ax.fill_between(uu, lo, hi, color="gray", alpha=0.18, label="95% KS band")
+    ax.step(pits_sorted, ecdf, where="post", color="royalblue", lw=2, label="PIT ECDF")
+
+    title = f"{title_prefix} PIT ECDF"
+    if np.isfinite(stats["ks_stat"]):
+        title += f"\nKS={stats['ks_stat']:.3f}, p={stats['ks_pvalue']:.3g}"
+
+    ax.set_title(title)
+    ax.set_xlabel("u")
+    ax.set_ylabel("ECDF of PIT")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend(frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+    return pits, stats
+
+def compute_spliced_pit_batched(spliced_quantile, params_np, y_true_np, horizon=0, batch_size=256, device="cpu"):
     """
-    v(x) =
-      two_sided:  (x-thr_low) for x<=thr_low  +  (x-thr_high) for x>=thr_high
-                = -ReLU(thr_low - x) + ReLU(x - thr_high)
-      below:     (x-thr_low) for x<=thr_low  = -ReLU(thr_low - x)
-      above:     (x-thr_high) for x>=thr_high = ReLU(x - thr_high)
+    Compute exact tail-aware PIT = F(y) for a SplicedGPDQuantile.
 
-    If smooth_h > 0, uses Softplus as a smooth approximation:
-      ReLU(z) ~ Softplus(h*z)/h  (for large h)
+    params_np: (B,H,P)
+    y_true_np: (B,H)
+
+    returns:
+      pits: (B,)
     """
-    def __init__(self, threshold_low=None, threshold_high=None,
-                 side: str = "two_sided", smooth_h: float = 0.0):
-        super().__init__()
-        assert side in {"two_sided", "below", "above"}
-        self.side = side
-        self.smooth_h = float(smooth_h)
+    B = params_np.shape[0]
+    pits = np.empty(B, dtype=np.float32)
 
-        if threshold_low is None:
-            self.register_buffer("threshold_low", torch.tensor(0.0))
-            self.has_low = False
-        else:
-            self.register_buffer("threshold_low", torch.tensor(float(threshold_low)))
-            self.has_low = True
+    spliced_quantile.eval()
 
-        if threshold_high is None:
-            self.register_buffer("threshold_high", torch.tensor(0.0))
-            self.has_high = False
-        else:
-            self.register_buffer("threshold_high", torch.tensor(float(threshold_high)))
-            self.has_high = True
+    with torch.inference_mode():
+        for b0, b1 in _batched_range(B, batch_size):
+            params_t = torch.from_numpy(params_np[b0:b1, horizon:horizon+1]).to(device=device, dtype=torch.float32)  # (b,1,P)
+            y_t = torch.from_numpy(y_true_np[b0:b1, horizon:horizon+1]).to(device=device, dtype=torch.float32)       # (b,1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.smooth_h
+            pit_t = spliced_quantile.pit(params_t, y_t)  # (b,1)
+            pits[b0:b1] = pit_t[:, 0].detach().cpu().numpy().astype(np.float32)
 
-        # Pick ReLU-like primitive (exact or smoothed)
-        if h and h > 0:
-            def relu_like(z):  # smooth ReLU(z)
-                return F.softplus(h * z) / h
-        else:
-            relu_like = F.relu
+            del params_t, y_t, pit_t
 
-        v = 0.0
-
-        if self.side in {"two_sided", "below"}:
-            if not self.has_low:
-                raise ValueError("threshold_low must be provided for side='below' or 'two_sided'")
-            v = v - relu_like(self.threshold_low - x)  # (x-thr_low) for x<=thr_low
-
-        if self.side in {"two_sided", "above"}:
-            if not self.has_high:
-                raise ValueError("threshold_high must be provided for side='above' or 'two_sided'")
-            v = v + relu_like(x - self.threshold_high)  # (x-thr_high) for x>=thr_high
-
-        return v
+    return pits
 
 # def chaining_function(x, threshold_high, threshold_low, side="two_sided", smooth_h=0.0):
 #     if side == "two_sided":

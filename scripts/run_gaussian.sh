@@ -1,12 +1,10 @@
 for alpha in 0.5 
 do
-for task in distribution
+for task in gaussian
 do
 for model in TSMixer
 do
-for loss in twcrps
-do
-for tail in gpd
+for loss in crps twcrps
 do
 for decomp in spline
 do
@@ -46,14 +44,8 @@ python main_lightning.py \
     --knot_kind uniform \
     --knot_p $knot_p \
     --spline_degree 3 \
-    --tail_model $tail \
-    --gpd_u_low 0.02 \
-    --gpd_u_high 0.98 \
-    --gpd_xi_min -0.25 \
-    --gpd_xi_max 0.5 \
     --remote_logging \
 
-done
 done
 done
 done
