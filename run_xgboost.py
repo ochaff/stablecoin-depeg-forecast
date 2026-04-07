@@ -1,17 +1,25 @@
+
+# Import models
 import xgboost
+from xgboost import XGBClassifier
 from xgboost import plot_importance
+
+import lightgbm as lgb
+from lightgbm import LGBMClassifier
+from catboost import CatBoostClassifier
+from sklearn.ensemble import RandomForestClassifier
+
+
 import pandas as pd
 import numpy as np
-from xgboost import XGBClassifier
 from sklearn.metrics import (
     roc_auc_score, average_precision_score,
     confusion_matrix, classification_report,
-    roc_curve, precision_recall_curve, confusion_matrix_at_thresholds
+    roc_curve, precision_recall_curve
 )
 import matplotlib.pyplot as plt
 
 import shap
-from xgboost import plot_importance
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from utils.build_dataset import build_dataset, add_dataset_args
 import argparse
@@ -19,7 +27,11 @@ import argparse
 import os
 import tempfile
 import mlflow
+import mlflow.sklearn
+import mlflow.lightgbm
+import mlflow.catboost
 import mlflow.xgboost
+
 from mlflow.models.signature import infer_signature
 from dotenv import load_dotenv
 load_dotenv()
@@ -40,6 +52,246 @@ def _mlflow_log_current_fig(filename, artifact_subdir="plots", dpi=200):
         mlflow.log_artifact(fp, artifact_subdir)
     plt.close()
 
+def build_model(args, pos_weight):
+    if args.model_name == "xgboost":
+        return XGBClassifier(
+            n_estimators=args.n_estimators,
+            learning_rate=args.learning_rate,
+            max_depth=args.max_depth,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
+            min_child_weight=1.0,
+            objective="binary:logistic",
+            eval_metric="auc",
+            early_stopping_rounds=args.early_stopping_rounds,
+            scale_pos_weight=pos_weight,
+            random_state=1233,
+            n_jobs=args.n_jobs,
+        )
+
+    elif args.model_name == "lightgbm":
+        return LGBMClassifier(
+            n_estimators=args.n_estimators,
+            learning_rate=args.learning_rate,
+            max_depth=args.max_depth,
+            num_leaves=args.num_leaves,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
+            min_child_weight=1.0,
+            objective="binary",
+            scale_pos_weight=pos_weight,
+            random_state=1233,
+            n_jobs=args.n_jobs,
+            verbosity=-1,
+        )
+
+    elif args.model_name == "catboost":
+        return CatBoostClassifier(
+            iterations=args.n_estimators,
+            learning_rate=args.learning_rate,
+            depth=args.max_depth,
+            loss_function="Logloss",
+            eval_metric="AUC",
+            class_weights=[1.0, float(pos_weight)],
+            random_seed=1233,
+            verbose=False,
+        )
+
+    elif args.model_name == "random_forest":
+        return RandomForestClassifier(
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth,
+            class_weight={0: 1.0, 1: float(pos_weight)},
+            random_state=1233,
+            n_jobs=args.n_jobs,
+            max_features=args.rf_max_features,
+        )
+
+    else:
+        raise ValueError(f"Unsupported model_name: {args.model_name}")    
+    
+
+def fit_model(model, args, X_train, y_train, X_val, y_val):
+    if args.model_name == "xgboost":
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_train, y_train), (X_val, y_val)],
+            verbose=False
+        )
+
+    elif args.model_name == "lightgbm":
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_train, y_train), (X_val, y_val)],
+            eval_metric="auc",
+            callbacks=[lgb.early_stopping(args.early_stopping_rounds, verbose=False)]
+        )
+
+    elif args.model_name == "catboost":
+        model.fit(
+            X_train, y_train,
+            eval_set=(X_val, y_val),
+            use_best_model=True,
+            verbose=False
+        )
+
+    elif args.model_name == "random_forest":
+        model.fit(X_train, y_train)
+
+    else:
+        raise ValueError(f"Unsupported model_name: {args.model_name}")
+
+def get_best_iteration(model, model_name):
+    if model_name == "xgboost":
+        bi = getattr(model, "best_iteration", None)
+    elif model_name == "lightgbm":
+        bi = getattr(model, "best_iteration_", None)
+    elif model_name == "catboost":
+        bi = model.get_best_iteration()
+    else:
+        bi = None
+
+    return -1 if bi is None else int(bi)
+
+def log_model_to_mlflow(model, model_name, signature, input_example):
+    if model_name == "xgboost":
+        mlflow.xgboost.log_model(
+            model,
+            artifact_path="model",
+            signature=signature,
+            input_example=input_example,
+        )
+
+    elif model_name == "lightgbm":
+        mlflow.lightgbm.log_model(
+            model,
+            artifact_path="model",
+            signature=signature,
+            input_example=input_example,
+        )
+
+    elif model_name == "catboost":
+        mlflow.catboost.log_model(
+            model,
+            artifact_path="model",
+            signature=signature,
+            input_example=input_example,
+        )
+
+    elif model_name == "random_forest":
+        mlflow.sklearn.log_model(
+            model,
+            artifact_path="model",
+            signature=signature,
+            input_example=input_example,
+        )
+
+    else:
+        raise ValueError(f"Unsupported model_name: {model_name}")
+    
+def get_native_feature_importance(model, model_name, feature_names):
+    if model_name == "catboost":
+        importances = model.get_feature_importance()
+    else:
+        importances = getattr(model, "feature_importances_", None)
+
+    if importances is None:
+        return None
+
+    return pd.Series(importances, index=feature_names).sort_values(ascending=False)
+
+def log_native_feature_importance(model, model_name, feature_names):
+    imp = get_native_feature_importance(model, model_name, feature_names)
+    if imp is None:
+        return
+
+    top_imp = imp.head(20)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    top_imp.iloc[::-1].plot(kind="barh", ax=ax, color="steelblue")
+    ax.set_title(f"{model_name} native feature importance")
+    ax.set_xlabel("importance")
+    fig.tight_layout()
+
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "feature_importance_native.png")
+        fig.savefig(fp, dpi=200, bbox_inches="tight")
+        mlflow.log_artifact(fp, "plots/feature_importance")
+    plt.close(fig)
+
+def normalize_shap_output(shap_output, X, expected_value=None, positive_class_idx=1):
+    feature_names = list(X.columns)
+    data = X.values
+
+    if isinstance(shap_output, shap.Explanation):
+        values = shap_output.values
+        base_values = shap_output.base_values
+
+        # already 2D: (n_samples, n_features)
+        if values.ndim == 2:
+            return shap_output
+
+        # binary/multiclass style: (n_samples, n_features, n_classes)
+        if values.ndim == 3:
+            values = values[:, :, positive_class_idx]
+
+            if isinstance(base_values, np.ndarray):
+                if base_values.ndim == 2:
+                    base_values = base_values[:, positive_class_idx]
+                elif base_values.ndim == 1 and len(base_values) > positive_class_idx and len(base_values) != len(values):
+                    base_values = np.repeat(base_values[positive_class_idx], values.shape[0])
+
+            return shap.Explanation(
+                values=values,
+                base_values=base_values,
+                data=data,
+                feature_names=feature_names
+            )
+
+    # old SHAP API: list of arrays
+    if isinstance(shap_output, list):
+        values = shap_output[positive_class_idx] if len(shap_output) > 1 else shap_output[0]
+
+        if isinstance(expected_value, (list, np.ndarray)):
+            base_value = expected_value[positive_class_idx] if len(expected_value) > positive_class_idx else expected_value[0]
+        else:
+            base_value = expected_value
+
+        if np.isscalar(base_value):
+            base_value = np.repeat(base_value, len(X))
+
+        return shap.Explanation(
+            values=values,
+            base_values=base_value,
+            data=data,
+            feature_names=feature_names
+        )
+
+    arr = np.asarray(shap_output)
+    if arr.ndim == 3:
+        arr = arr[:, :, positive_class_idx]
+
+    return shap.Explanation(
+        values=arr,
+        data=data,
+        feature_names=feature_names
+    )
+
+def compute_shap_explanation(model, X_explain, shap_type):
+    explainer = shap.TreeExplainer(model, feature_perturbation=shap_type)
+    raw_shap = explainer(X_explain)
+    shap_values = normalize_shap_output(
+        raw_shap,
+        X_explain,
+        expected_value=getattr(explainer, "expected_value", None),
+        positive_class_idx=1
+    )
+    return explainer, shap_values
+
+
+
 os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv('MLFLOW_TRACKING_USERNAME')
 os.environ['MLFLOW_TRACKING_PASSWORD'] = os.getenv('MLFLOW_TRACKING_PASSWORD')
 uri = os.getenv('MLFLOW_TRACKING_URI')
@@ -57,13 +309,20 @@ if __name__ == "__main__":
     training_args.add_argument('--test_size', type=float, default=0.30, help='proportion of dataset to use as test set')
     training_args.add_argument('--val_size', type=float, default=0.15, help='proportion of dataset to use as validation set')
     training_args.add_argument('--scaler', type = str, default = 'standard', help='whether to scale features using StandardScaler')
-    training_args.add_argument('--learning_rate', type=float, default=0.01, help='learning rate for XGBoost')
-    training_args.add_argument('--early_stopping_rounds', type=int, default=200, help='early stopping rounds for XGBoost')
-    training_args.add_argument('--objective', type=str, default='binary:logistic', help='objective function for XGBoost')
-    training_args.add_argument('--eval_metric', type=str, default='auc', help='evaluation metric for XGBoost')
-    training_args.add_argument('--n_estimators', type=int, default=800, help='number of trees for XGBoost')
-    training_args.add_argument('--shap_type', type=str, default='tree_path_dependent', help='type of SHAP explainer to use')
-    training_args.add_argument('--max_depth', type=int, default=6, help='maximum tree depth for XGBoost')
+    training_args.add_argument('--model_name',type=str, default='xgboost', choices=['xgboost', 'lightgbm', 'catboost', 'random_forest'], help='which model to train')
+
+
+    model_args = parser.add_argument_group('Model arguments')
+    model_args.add_argument('--learning_rate', type=float, default=0.01, help='learning rate for XGBoost')
+    model_args.add_argument('--early_stopping_rounds', type=int, default=200, help='early stopping rounds for XGBoost')
+    model_args.add_argument('--eval_metric', type=str, default='auc', help='evaluation metric for XGBoost')
+    model_args.add_argument('--n_estimators', type=int, default=800, help='number of trees for XGBoost')
+    model_args.add_argument('--shap_type', type=str, default='tree_path_dependent', help='type of SHAP explainer to use')
+    model_args.add_argument('--max_depth', type=int, default=6, help='maximum tree depth')
+    model_args.add_argument('--num_leaves', type=int, default=31, help='LightGBM only')
+    model_args.add_argument('--rf_max_features', type=str, default='sqrt', help='RandomForest only')
+    model_args.add_argument('--n_jobs', type=int, default=-1, help='parallel jobs where supported')
+
     args = parser.parse_args()
     dict_args = vars(args)
     dict_args['target'] = True
@@ -128,32 +387,19 @@ if __name__ == "__main__":
         X_val_scaled[num_cols]   = scaler.transform(X_val[num_cols])
         X_test_scaled[num_cols]  = scaler.transform(X_test[num_cols])
         X_train, X_val, X_test = X_train_scaled, X_val_scaled, X_test_scaled
-    n_pos = (y_train == 1).sum()
-    n_neg = (y_train == 0).sum()
-    w_pos = (n_neg / max(n_pos, 1))
+    
+    n_pos = int((y_train == 1).sum())
+    n_neg = int((y_train == 0).sum())
+    w_pos = float(n_neg / max(n_pos, 1))
     print(f"Train positives={n_pos}, negatives={n_neg}, w_pos={w_pos:.3f}")
 
-    bal = (len(y)-sum(y))/sum(y)
-
-    model = XGBClassifier(
-        n_estimators=args.n_estimators,
-        learning_rate=args.learning_rate,
-        max_depth=args.max_depth,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=1.0,
-        min_child_weight=1.0,
-        objective=args.objective,
-        eval_metric=args.eval_metric,
-        early_stopping_rounds=args.early_stopping_rounds,
-        scale_pos_weight=bal,      
-        random_state=1233,
-    )
+    model = build_model(args, pos_weight=w_pos)
 
     with mlflow.start_run(run_name=args.run_name):
 
         # Log params (a lot of them)
         mlflow.log_params({
+            "model_name": args.model_name,
             "alpha": args.alpha,
             "dataset_path": dataset_path,
             "test_size": args.test_size,
@@ -161,25 +407,23 @@ if __name__ == "__main__":
             "scaler": args.scaler,
             "learning_rate": args.learning_rate,
             "early_stopping_rounds": args.early_stopping_rounds,
-            "objective": args.objective,
             "eval_metric": args.eval_metric,
             "n_estimators": args.n_estimators,
+            "max_depth": args.max_depth,
+            "num_leaves": args.num_leaves,
+            "rf_max_features": args.rf_max_features,
             "target_window": args.target_window,
             "target_threshold": args.target_threshold,
             "depeg_side": args.depeg_side,
             "dynamic_threshold": int(args.dynamic_threshold),
-            "scale_pos_weight_used": float(bal),
+            "scale_pos_weight_used": float(w_pos),
             "n_features": len(FEATURES),
         })
 
         # ---- train ----
-        model.fit(
-            X_train, y_train,
-            eval_set=[(X_train, y_train), (X_val, y_val)],
-            verbose=False
-        )
-
-        mlflow.log_metric("best_iteration", int(model.best_iteration) if model.best_iteration is not None else -1)
+        fit_model(model, args, X_train, y_train, X_val, y_val)
+        
+        mlflow.log_metric("best_iteration", get_best_iteration(model, args.model_name))
 
         # ---- evaluate ----
         proba_test = model.predict_proba(X_test)[:, 1]
@@ -253,13 +497,13 @@ if __name__ == "__main__":
 
         # If you used StandardScaler, also log it so you can reproduce inference
         if args.scaler == "standard":
-            mlflow.sklearn.log_model(scaler, artifact_path="preprocess/scaler")
+            mlflow.sklearn.log_model(scaler, name="preprocess_scaler")
         if args.scaler == "robust":
-            mlflow.sklearn.log_model(scaler, artifact_path="preprocess/scaler")
+            mlflow.sklearn.log_model(scaler, name="preprocess_scaler")
 
-        mlflow.xgboost.log_model(
-            xgb_model=model.get_booster(),
-            artifact_path="model",
+        log_model_to_mlflow(
+            model=model,
+            model_name=args.model_name,
             signature=signature,
             input_example=X_train.head(5),
         )
@@ -272,8 +516,11 @@ if __name__ == "__main__":
             mlflow.log_artifact(fp, "meta")
         
         X_explain = X_test.copy()
-        explainer = shap.TreeExplainer(model, feature_perturbation=args.shap_type)
-        shap_values = explainer(X_explain)
+        explainer, shap_values = compute_shap_explanation(
+            model=model,
+            X_explain=X_explain,
+            shap_type=args.shap_type
+        )
 
         # ---------- 1) SHAP beeswarm (global) ----------
         # (shap.plots.* creates a figure; we just save+log it)
@@ -282,9 +529,13 @@ if __name__ == "__main__":
         shap.plots.beeswarm(shap_values, order=order, max_display=10, show=False)
         _mlflow_log_current_fig("shap_beeswarm_global.png", artifact_subdir="plots/shap")
         
-        
-        
-        shap_values_train = explainer(X_train)
+        raw_train_shap = explainer(X_train)
+        shap_values_train = normalize_shap_output(
+            raw_train_shap,
+            X_train,
+            expected_value=getattr(explainer, "expected_value", None),
+            positive_class_idx=1
+        )
         std_per_feature_train = shap_values_train.values.std(axis=0)
         order = np.argsort(std_per_feature_train)[::-1]
         shap.plots.beeswarm(shap_values_train, order=order, max_display=10, show=False)
@@ -304,23 +555,8 @@ if __name__ == "__main__":
             shap.plots.beeswarm(sv_warn, order=order_pos, max_display=10, show=False)
             _mlflow_log_current_fig("shap_beeswarm_above_threshold_ordered_by_pos_mean.png", artifact_subdir="plots/shap")
 
-        # ---------- 4) XGBoost feature importance (gain/weight/cover) ----------
-        for importance_type in ["gain", "weight", "cover"]:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            plot_importance(
-                model,
-                importance_type=importance_type,
-                max_num_features=20,
-                height=0.6,
-                ax=ax
-            )
-            ax.set_title(f"XGBClassifier feature importance ({importance_type})")
-            fig.tight_layout()
-            with tempfile.TemporaryDirectory() as d:
-                fp = os.path.join(d, f"xgb_feature_importance_{importance_type}.png")
-                fig.savefig(fp, dpi=200, bbox_inches="tight")
-                mlflow.log_artifact(fp, "plots/feature_importance")
-            plt.close(fig)
+        # ---------- 4) Native feature importance (gain/weight/cover) ----------
+        log_native_feature_importance(model, args.model_name, FEATURES)
 
         # ---------- 5) Predictions over time (probability + poolTick + shaded events) ----------
         test_dates = df["timestamp"].iloc[val_end:].reset_index(drop=True)
@@ -355,7 +591,7 @@ if __name__ == "__main__":
             mlflow.log_artifact(fp, "plots/timeseries")
         plt.close(fig)
 
-        # ---- choose top 10 features by mean(|SHAP|) ----
+        # ---- choose top 10 features by std(|SHAP|) ----
         mean_abs = np.abs(shap_values.values).std(axis=0)
         top10_idx = np.argsort(mean_abs)[::-1][:10]
         feature_names = list(shap_values.feature_names) if shap_values.feature_names is not None else list(X_test.columns)

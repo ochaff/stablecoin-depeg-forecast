@@ -86,25 +86,25 @@ def crv_3pool_metrics():
     return crv_metrics
 
 def gegenbauer_timeseries_features(df, alpha=0.5, win = 24):
-    df["E_shape_logret"] = df['E_shape'].pct_change()
-    df["E_odd_logret"]  = df['E_odd'].pct_change()
-    df["E_even_logret"] = df['E_even'].pct_change()
+    df["E_shape_logret"] = df['E_shape'].pct_change(fill_method = None)
+    df["E_odd_logret"]  = df['E_odd'].pct_change(fill_method = None)
+    df["E_even_logret"] = df['E_even'].pct_change(fill_method = None)
 
-    df["odd_ratio_logret"]  = df['odd_ratio'].pct_change()
-    df["even_ratio_logret"] = df['even_ratio'].pct_change()
-    df["odd_to_even_ratio_logret"] = df['odd_to_even_ratio'].pct_change()
+    df["odd_ratio_logret"]  = df['odd_ratio'].pct_change(fill_method = None)
+    df["even_ratio_logret"] = df['even_ratio'].pct_change(fill_method = None)
+    df["odd_to_even_ratio_logret"] = df['odd_to_even_ratio'].pct_change(fill_method = None)
 
-    df["E_low_logret"]  = df['E_low'].pct_change()
-    df["E_mid_logret"]  = df['E_mid'].pct_change()
-    df["E_high_logret"] = df['E_high'].pct_change()
+    df["E_low_logret"]  = df['E_low'].pct_change(fill_method = None)
+    df["E_mid_logret"]  = df['E_mid'].pct_change(fill_method = None)
+    df["E_high_logret"] = df['E_high'].pct_change(fill_method = None)
 
-    df["low_ratio_logret"]  = df['low_ratio'].pct_change()
-    df["mid_ratio_logret"]  = df['mid_ratio'].pct_change()
-    df["high_ratio_logret"] = df['high_ratio'].pct_change()
+    df["low_ratio_logret"]  = df['low_ratio'].pct_change(fill_method = None)
+    df["mid_ratio_logret"]  = df['mid_ratio'].pct_change(fill_method = None)
+    df["high_ratio_logret"] = df['high_ratio'].pct_change(fill_method = None)
      
     for i in range(8):
         df[f'Gegenbauer_{alpha}_deg{i}_MA{win}'] =  df[f'Gegenbauer_{alpha}_deg{i}'].rolling(window = win, min_periods = 1).mean()
-        df[f'Gegenbauer_{alpha}_deg{i}_logret'] =  df[f'Gegenbauer_{alpha}_deg{i}'].pct_change()
+        df[f'Gegenbauer_{alpha}_deg{i}_logret'] =  df[f'Gegenbauer_{alpha}_deg{i}'].pct_change(fill_method = None)
         df[f'Gegenbauer_{alpha}_deg{i}_vol{win}'] =  df[f'Gegenbauer_{alpha}_deg{i}_logret'].rolling(window = win, min_periods = 1).std()
     df = df.iloc[win:]
     return df
@@ -310,18 +310,18 @@ def gegenbauer_energy_features(df, alpha=0.4):
     cols = [f"{PREFIX}{i}" for i in range(8)]
     sq = df[cols].pow(2)
 
-    df["E_total"] = sq.sum(axis=1)
+    df["E_total"] = sq.sum(axis=1, min_count = len(cols))
 
 
     shape_cols = [f"{PREFIX}{i}" for i in range(1, 8)]
-    df["E_shape"] = sq[shape_cols].sum(axis=1)
+    df["E_shape"] = sq[shape_cols].sum(axis=1, min_count = len(shape_cols))
 
 
     odd_cols  = [f"{PREFIX}{i}" for i in [1, 3, 5, 7]]
     even_cols = [f"{PREFIX}{i}" for i in [2, 4, 6]]  # exclude 0 on purpose
 
-    df["E_odd"]  = sq[odd_cols].sum(axis=1)
-    df["E_even"] = sq[even_cols].sum(axis=1)
+    df["E_odd"]  = sq[odd_cols].sum(axis=1, min_count = len(odd_cols))
+    df["E_even"] = sq[even_cols].sum(axis=1, min_count = len(even_cols))
 
     df["odd_ratio"]  = df["E_odd"]  / (df["E_shape"] + eps)
     df["even_ratio"] = df["E_even"] / (df["E_shape"] + eps)
@@ -332,9 +332,9 @@ def gegenbauer_energy_features(df, alpha=0.4):
     mid_cols  = [f"{PREFIX}{i}" for i in [3, 4]]
     high_cols = [f"{PREFIX}{i}" for i in [5, 6, 7]]
 
-    df["E_low"]  = sq[low_cols].sum(axis=1)
-    df["E_mid"]  = sq[mid_cols].sum(axis=1)
-    df["E_high"] = sq[high_cols].sum(axis=1)
+    df["E_low"]  = sq[low_cols].sum(axis=1, min_count = len(low_cols))
+    df["E_mid"]  = sq[mid_cols].sum(axis=1, min_count = len(mid_cols))
+    df["E_high"] = sq[high_cols].sum(axis=1, min_count = len(high_cols))
 
     df["low_ratio"]  = df["E_low"]  / (df["E_shape"] + eps)
     df["mid_ratio"]  = df["E_mid"]  / (df["E_shape"] + eps)
@@ -418,7 +418,7 @@ def build_dataset(
         if fear_greed: 
             try:
                 dfG = fear_greed_index()
-                dfG = dfG.reindex_like(dataset, method='ffill')
+                dfG = dfG.reindex(dataset.index, method='ffill')
                 dataset = dataset.join(dfG.rename('fear_greed_index'))
             except Exception as e:      
                 print(e)
@@ -426,6 +426,8 @@ def build_dataset(
         if gegen:
             try:
                 gegen_scores = decomp_logL_curve(alpha)
+                gegen_scores = gegen_scores.reindex(dataset.index, method='ffill')
+                gegen_scores = gegen_scores.ffill()
                 dataset = dataset.join(gegen_scores)
                 dataset = gegenbauer_energy_features(dataset, alpha=alpha)
                 if gegen_indicators:
@@ -495,7 +497,9 @@ def build_dataset(
             else:
                 dataset["target"] = hit_hard.fillna(False).astype(int)
 
-        dataset = dataset.astype('float32').ffill()
+        dataset = dataset.replace([np.inf, -np.inf], np.nan)
+        dataset = dataset.ffill()
+        dataset = dataset.astype('float32')
         if target:
             if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators): 
                 if not bypass:

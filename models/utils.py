@@ -154,6 +154,21 @@ def uniform_u(J: int, eps: float = 1e-5, device=None, dtype=torch.float32):
     u = u.clamp(eps, 1.0 - eps)
     return u
 
+def logit_u(J: int, eps: float = 1e-6, device=None, dtype=torch.float32):
+    # uniform spacing in logit space -> many points near 0 and 1
+    lo = torch.logit(torch.tensor(eps, device=device, dtype=dtype))
+    hi = torch.logit(torch.tensor(1.0 - eps, device=device, dtype=dtype))
+    t = torch.linspace(lo, hi, J, device=device, dtype=dtype)
+    u = torch.sigmoid(t)
+    return u
+
+def power_tails_u(J: int, p: float = 1/3, eps: float = 1e-6, device=None, dtype=torch.float32):
+    # start from uniform in (0,1), then warp toward tails
+    u0 = (torch.arange(J, device=device, dtype=dtype) + 0.5) / J  # (0,1)
+    # symmetric power warp around 0.5
+    u = 0.5 + 0.5 * torch.sign(u0 - 0.5) * (2.0 * torch.abs(u0 - 0.5))**p
+    return u.clamp(eps, 1.0 - eps)
+
 def chebyshev_basis(u: torch.Tensor, K: int):
     """
     u: (J,) in (0,1)

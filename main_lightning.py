@@ -11,6 +11,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, Learning
 from dotenv import load_dotenv
 from lightning.pytorch.tuner import Tuner
 import mlflow
+from models.TimeXer import TimeXer_forecast
 from models.iTransformer import iTransformer_forecast, iTransformer_earlywarning
 from models.TSMixer import TSMixer_forecast, TSMixer_earlywarning
 from models.CNN import CNN_earlywarning
@@ -41,7 +42,7 @@ if __name__ == "__main__":
         'iTransformer':[iTransformer_forecast, iTransformer_earlywarning],
         'TSMixer':[TSMixer_forecast, TSMixer_earlywarning],
         'CNN': [None, CNN_earlywarning],
-        'TimeXer' : [None, None]
+        'TimeXer' : [TimeXer_forecast, None]
     }
     if temp_args[0].method == "forecast":
         model = model_dict[temp_args[0].model_name][0]

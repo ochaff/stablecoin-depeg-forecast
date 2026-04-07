@@ -13,7 +13,7 @@ import tempfile
 import shap
 from pathlib import Path
 from sklearn.metrics import roc_auc_score, average_precision_score, confusion_matrix, roc_curve, precision_recall_curve, auc, average_precision_score
-from models.utils import chebyshev_lobatto_u, uniform_u, chebyshev_basis, cdf_from_quantile_on_grid, _interp_idx_w, ChainingFunction, _ensure_dir, _batched_range, plot_quantile_cdf_pdf, plot_fan_chart, plot_pit_hist, make_open_nonuniform_knots, mspline_ispline_on_grid
+from models.utils import chebyshev_lobatto_u, uniform_u, chebyshev_basis, cdf_from_quantile_on_grid, _interp_idx_w, ChainingFunction, _ensure_dir, _batched_range, plot_quantile_cdf_pdf, plot_fan_chart, plot_pit_hist, make_open_nonuniform_knots, mspline_ispline_on_grid, logit_u, power_tails_u
 
 
 class RevIN(nn.Module):
@@ -421,8 +421,6 @@ class ThresholdWeightedCRPSFromQuantiles(nn.Module):
         return loss
 
 
-
-
 class Baseclass_forecast(L.LightningModule):
     def __init__(self,
                 batch_size, test_batch_size,
@@ -453,6 +451,10 @@ class Baseclass_forecast(L.LightningModule):
                 u = chebyshev_lobatto_u(u_grid_size)
             elif self.grid_density == 'uniform':
                 u = uniform_u(u_grid_size)
+            elif self.grid_density == 'power-tail':
+                u = power_tails_u(u_grid_size)
+            elif self.grid_density == 'logit':
+                u = logit_u(u_grid_size)
             if self.quantile_decomp == "chebyshev":    
                 self.quantile = ChebyshevQuantile(K=n_cheb, u_grid=u, normalize=True, revin_type=self.revin_type)
             elif self.quantile_decomp == "spline":
@@ -719,7 +721,7 @@ class Baseclass_forecast(L.LightningModule):
         class_parser.add_argument('--twcrps_side', type=str, default='two_sided', choices=['below','above', 'two_sided'])
         class_parser.add_argument('--twcrps_smooth_h', type=float, default=2)
         class_parser.add_argument('--u_grid_size', type=int, default=128, help='number of points in the Chebyshev grid for distribution forecasting')
-        class_parser.add_argument('--grid_density', type=str, default='uniform', choices=['chebyshev', 'uniform'], help='type of grid for distribution forecasting')
+        class_parser.add_argument('--grid_density', type=str, default='uniform', choices=['chebyshev', 'uniform', 'logit', 'power-tail'], help='type of grid for distribution forecasting')
         class_parser.add_argument('--quantile_decomp', type=str, default='chebyshev', choices=['chebyshev', 'spline'], help='type of quantile decomposition for distribution forecasting')
         class_parser.add_argument('--spline_degree', type=int, default=3, help='degree of I-spline basis (if quantile_decomp is spline)')
         class_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power_tails', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)')

@@ -4,13 +4,15 @@ for task in distribution
 do
 for model in TSMixer
 do
-for loss in crps
+for loss in twcrps
 do
 for decomp in spline
 do
 for revin in revin
 do
-for knot_p in 1/3,3
+for knot_p in 3.0
+do
+for grid in logit power-tail 
 do
 
 python main_lightning.py \
@@ -19,7 +21,7 @@ python main_lightning.py \
     --model_name $model \
     --method forecast \
     --experiment_name stablecoin-depeg \
-    --run_name "${model}_alpha_${alpha}_${task}_${loss}_${decomp}_${revin}" \
+    --run_name "${model}_alpha_${alpha}_${task}_${loss}_${decomp}_${revin}_${grid}" \
     --n_epochs 100 \
     --patience 5 \
     --verbose 1 \
@@ -33,17 +35,18 @@ python main_lightning.py \
     --revin_type $revin \
     --affine 1 \
     --dist_loss $loss \
-    --n_cheb 8 \
+    --n_cheb 10 \
     --twcrps_side two_sided \
     --twcrps_smooth_h 1 \
-    --u_grid_size 200 \
-    --grid_density uniform \
+    --u_grid_size 256 \
+    --grid_density $grid \
     --quantile_decomp $decomp \
-    --knot_kind power_tails \
-    --knot_p 2 \
+    --knot_kind uniform \
+    --knot_p $knot_p \
     --spline_degree 3 \
     --remote_logging \
 
+done
 done
 done
 done
