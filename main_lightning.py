@@ -16,7 +16,8 @@ from models.iTransformer import iTransformer_forecast, iTransformer_earlywarning
 from models.TSMixer import TSMixer_forecast, TSMixer_earlywarning
 from models.CNN import CNN_earlywarning
 from utils.argument_parser import parse_arguments
-from utils.build_dataset import build_dataset
+from utils.build_dataset import build_dataset, attach_feature_names
+from models.custom import SparseNHITSiTransformer_forecast
 from data_loader.DataModules import DataModule_forecast, DataModule_earlywarning
 
 load_dotenv()
@@ -42,7 +43,8 @@ if __name__ == "__main__":
         'iTransformer':[iTransformer_forecast, iTransformer_earlywarning],
         'TSMixer':[TSMixer_forecast, TSMixer_earlywarning],
         'CNN': [None, CNN_earlywarning],
-        'TimeXer' : [TimeXer_forecast, None]
+        'TimeXer' : [TimeXer_forecast, None],
+        'SAINT' : [SparseNHITSiTransformer_forecast, None]
     }
     if temp_args[0].method == "forecast":
         model = model_dict[temp_args[0].model_name][0]
@@ -63,7 +65,16 @@ if __name__ == "__main__":
     elif args.method == 'earlywarning':
         data = DataModule_earlywarning(**dict_args)
         dict_args['pos_weight'] = data.pos_weight
+
     LModel = model(**dict_args)
+    # Make sure datamodule has loaded dataset metadata / feature names
+    if args.method == "forecast":
+        data.setup("fit")
+        data.setup("test")
+        # Attach ordered feature names from datamodule to lightning model
+        attach_feature_names(LModel, data)
+
+
     if args.remote_logging:
         logger = MLFlowLogger(experiment_name = args.experiment_name, run_name = args.run_name, tracking_uri = os.getenv('MLFLOW_TRACKING_URI'), artifact_location = os.getenv('ARTIFACT_URI'), log_model = True)
     else:

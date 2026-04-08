@@ -10,6 +10,27 @@ def add_swap_size_metrics():
     df_integral = pd.read_parquet('./data/Uniswap/swap_size_metrics.parquet')
     return df_integral
 
+def attach_feature_names(lightning_model, datamodule):
+    feature_cols = getattr(datamodule, "feature_cols", None)
+    covariate_cols = getattr(datamodule, "covariate_cols", None)
+    target_col = getattr(datamodule, "target_col", None)
+
+    # fallback for models that only expose feature_cols
+    if covariate_cols is None and feature_cols is not None:
+        covariate_cols = feature_cols[:-1]
+        target_col = feature_cols[-1]
+
+    if covariate_cols is not None:
+        lightning_model.var_names = list(covariate_cols)
+        if hasattr(lightning_model, "model"):
+            lightning_model.model.var_names = list(covariate_cols)
+
+    if target_col is not None:
+        lightning_model.target_name = str(target_col)
+        if hasattr(lightning_model, "model"):
+            lightning_model.model.target_name = str(target_col)
+
+    return lightning_model
 
 def add_forecasting_target(use_log_price = False):
     state = pd.read_parquet('data/Uniswap/USDC_USDT_hourly_metrics.parquet').query('feeTier == 100')
@@ -503,24 +524,44 @@ def build_dataset(
         dataset = dataset.replace([np.inf, -np.inf], np.nan)
         dataset = dataset.ffill()
         dataset = dataset.astype('float32')
-        if target:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators): 
-                if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet' 
+        if use_log_price:
+            if target:
+                if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators): 
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}_logp.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}_logp.parquet' 
+                else:
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}_logp.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}_logp.parquet'
             else:
-                if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet'
+                if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators):   
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_logp.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_logp.parquet'
+                else:
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_logp.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_full_logp.parquet'
         else:
-            if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators):   
-                if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}.parquet'
+            if target:
+                if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators): 
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet' 
+                else:
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_full_binarytarget_win-{target_window}_thresh-{target_threshold}_{depeg_side}_dynamic-{dynamic_threshold}.parquet'
             else:
-                if not bypass:
-                    dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full.parquet')
-                return f'{dataset_path}/dataset_alpha_{alpha}_full.parquet'
+                if not (aave and aave_liq and crv and eth_price and eth_indicators and btc_price and btc_indicators and fear_greed and gegen and gegen_indicators and swap_size and usd_index and usd_indicators):   
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_aave-{aave}_ethprice-{eth_price}_ethind-{eth_indicators}_btcprice-{btc_price}_btcind-{btc_indicators}_fear-{fear_greed}_gegen-{gegen}_gegenind-{gegen_indicators}_swap-{swap_size}_usdi-{usd_index}_usdiind-{usd_indicators}.parquet'
+                else:
+                    if not bypass:
+                        dataset.to_parquet(f'{dataset_path}/dataset_alpha_{alpha}_full.parquet')
+                    return f'{dataset_path}/dataset_alpha_{alpha}_full.parquet'
          
 def add_dataset_args(parser):
     dataset_building = parser.add_argument_group('dataset building arguments')

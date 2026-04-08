@@ -188,6 +188,7 @@ class TSMixer_forecast(Baseclass_forecast):
                 n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side,
                 twcrps_smooth_h, u_grid_size, dist_loss, grid_density, quantile_decomp, spline_degree, knot_kind, knot_p,
                 tail_model, gpd_u_low, gpd_u_high, gpd_xi_min, gpd_xi_max,
+                use_log_price,
                 **kwargs
                 ):
         super(TSMixer_forecast, self).__init__(
@@ -216,6 +217,7 @@ class TSMixer_forecast(Baseclass_forecast):
             gpd_u_high=gpd_u_high,
             gpd_xi_min=gpd_xi_min,
             gpd_xi_max=gpd_xi_max,
+            use_log_price=use_log_price,
         )
         self.model = Model(seq_len, pred_len, d_model, dropout, n_layers, method, forecast_task, dist_side, 
                            enc_in, affine, revin_type, n_cheb, tail_model

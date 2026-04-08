@@ -6,6 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import kstest, cramervonmises
 
+def bps_to_logprice(x_bps):
+    return np.log1p(x_bps / 10000.0)
 
 def make_open_knots_from_internal(internal: torch.Tensor, degree: int, a=0.0, b=1.0):
     """
@@ -1218,6 +1220,186 @@ def compute_spliced_var_es_batched(
 
     return var_pred, es_pred
 
+
+def _maybe_downsample_rows(arr: np.ndarray, max_rows: int):
+    n = arr.shape[0]
+    if n <= max_rows:
+        return arr, np.arange(n)
+    idx = np.linspace(0, n - 1, max_rows).astype(int)
+    return arr[idx], idx
+
+def plot_variable_heatmap_over_test(
+    values: np.ndarray,
+    out_path: str,
+    var_names=None,
+    title: str = "Variable heatmap over test windows",
+    top_k: int = 20,
+    max_rows: int = 2000,
+    cmap: str = "magma",
+):
+    """
+    values: (N_test, V)
+    """
+
+    assert values.ndim == 2, f"Expected (N,V), got {values.shape}"
+
+    mean_score = np.nanmean(values, axis=0)
+    top_k = min(top_k, values.shape[1])
+    var_idx = np.argsort(-mean_score)[:top_k]
+
+    vals = values[:, var_idx]
+    vals_ds, row_idx = _maybe_downsample_rows(vals, max_rows=max_rows)
+
+    if var_names is None:
+        ylabels = [f"v{i}" for i in var_idx]
+    else:
+        ylabels = [str(var_names[i]) for i in var_idx]
+
+    fig, ax = plt.subplots(figsize=(12, max(4, 0.35 * top_k)), dpi=150)
+    im = ax.imshow(vals_ds.T, aspect="auto", origin="lower", cmap=cmap)
+    ax.set_title(title)
+    ax.set_xlabel("Test window index")
+    ax.set_ylabel("Variable")
+    ax.set_yticks(np.arange(top_k))
+    ax.set_yticklabels(ylabels)
+    fig.colorbar(im, ax=ax)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+def plot_topk_variable_traces_over_test(
+    values: np.ndarray,
+    out_path: str,
+    var_names=None,
+    title: str = "Top-k variable traces over test windows",
+    top_k: int = 8,
+    smooth: int = 1,
+):
+    """
+    values: (N_test, V)
+    """
+
+    assert values.ndim == 2, f"Expected (N,V), got {values.shape}"
+
+    mean_score = np.nanmean(values, axis=0)
+    top_k = min(top_k, values.shape[1])
+    var_idx = np.argsort(-mean_score)[:top_k]
+
+    x = np.arange(values.shape[0])
+
+    fig, ax = plt.subplots(figsize=(12, 5), dpi=150)
+
+    for i in var_idx:
+        y = values[:, i]
+        if smooth > 1:
+            kernel = np.ones(smooth) / smooth
+            y = np.convolve(y, kernel, mode="same")
+        label = str(var_names[i]) if var_names is not None else f"v{i}"
+        ax.plot(x, y, lw=1.5, label=label)
+
+    ax.set_title(title)
+    ax.set_xlabel("Test window index")
+    ax.set_ylabel("Value")
+    ax.legend(loc="upper right", ncol=2, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+def plot_gate_open_rate_bar(
+    hard_gates: np.ndarray,
+    out_path: str,
+    var_names=None,
+    title: str = "Mean hard-gate openness by variable",
+    top_k: int = 20,
+):
+    """
+    hard_gates: (N_test, V)
+    """
+
+    assert hard_gates.ndim == 2, f"Expected (N,V), got {hard_gates.shape}"
+
+    open_rate = np.nanmean(hard_gates, axis=0)
+    top_k = min(top_k, hard_gates.shape[1])
+    var_idx = np.argsort(-open_rate)[:top_k]
+
+    labels = [str(var_names[i]) if var_names is not None else f"v{i}" for i in var_idx]
+    vals = open_rate[var_idx]
+
+    fig, ax = plt.subplots(figsize=(12, 4), dpi=150)
+    ax.bar(np.arange(top_k), vals)
+    ax.set_title(title)
+    ax.set_ylabel("Mean gate value")
+    ax.set_xticks(np.arange(top_k))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+def plot_cross_attention_sample(
+    attn_hv: np.ndarray,
+    out_path: str,
+    var_names=None,
+    title: str = "Cross-attention heatmap",
+    top_k: int = 20,
+    cmap: str = "viridis",
+):
+    """
+    attn_hv: (H, V)
+    """
+
+    assert attn_hv.ndim == 2, f"Expected (H,V), got {attn_hv.shape}"
+
+    mean_score = np.nanmean(attn_hv, axis=0)
+    top_k = min(top_k, attn_hv.shape[1])
+    var_idx = np.argsort(-mean_score)[:top_k]
+    vals = attn_hv[:, var_idx]  # (H, top_k)
+
+    labels = [str(var_names[i]) if var_names is not None else f"v{i}" for i in var_idx]
+
+    fig, ax = plt.subplots(figsize=(12, max(4, 0.35 * top_k)), dpi=150)
+    im = ax.imshow(vals.T, aspect="auto", origin="lower", cmap=cmap)
+    ax.set_title(title)
+    ax.set_xlabel("Forecast horizon")
+    ax.set_ylabel("Variable")
+    ax.set_yticks(np.arange(top_k))
+    ax.set_yticklabels(labels)
+    fig.colorbar(im, ax=ax)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+def plot_cross_attention_over_test(
+    attn_nhv: np.ndarray,
+    out_path: str,
+    var_names=None,
+    title: str = "Cross-attention over test windows",
+    horizon_reduce: str = "mean",
+    top_k: int = 20,
+    max_rows: int = 2000,
+):
+    """
+    attn_nhv: (N_test, H, V)
+    """
+
+    assert attn_nhv.ndim == 3, f"Expected (N,H,V), got {attn_nhv.shape}"
+
+    if horizon_reduce == "mean":
+        vals = np.nanmean(attn_nhv, axis=1)
+    elif horizon_reduce == "max":
+        vals = np.nanmax(attn_nhv, axis=1)
+    elif horizon_reduce == "last":
+        vals = attn_nhv[:, -1, :]
+    else:
+        raise ValueError(f"Unknown horizon_reduce={horizon_reduce}")
+
+    plot_variable_heatmap_over_test(
+        values=vals,
+        out_path=out_path,
+        var_names=var_names,
+        title=f"{title} ({horizon_reduce} over horizon)",
+        top_k=top_k,
+        max_rows=max_rows,
+    )
 
 
 

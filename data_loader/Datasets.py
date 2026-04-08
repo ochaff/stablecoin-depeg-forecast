@@ -24,28 +24,35 @@ class Dataset_forecast(Dataset) :
     def __read_data__(self):
         df = pd.read_parquet(self.path)
 
-        if self.split < 1 :   
-            self.split = int(self.split*df.shape[0])
-            self.splitval = int(self.splitval*df.shape[0])
-        else :
+        if self.split < 1:
+            self.split = int(self.split * df.shape[0])
+            self.splitval = int(self.splitval * df.shape[0])
+        else:
             self.split = int(self.split)
             self.splitval = int(self.splitval)
-        
-        if self.set_type == 0 :
+
+        if self.set_type == 0:
             df = df.iloc[:self.splitval]
-            if self.scaler != None :
-                df = self.scaler.fit_transform(df)
+            if self.scaler is not None:
+                df = pd.DataFrame(self.scaler.fit_transform(df), index=df.index, columns=df.columns)
         elif self.set_type == 1:
-            df = df.iloc[self.splitval-self.seq_len:self.split]
-            if self.scaler != None :
-                df = self.scaler.fit_transform(df)
-        elif self.set_type == 2 :
-            df = df.iloc[self.split-self.seq_len:]
-            if self.scaler != None :
-                df = self.scaler.fit_transform(df)
-        
-        self.data_x = df.values 
-        self.data_y = df['depeg_bps'].values
+            df = df.iloc[self.splitval - self.seq_len:self.split]
+            if self.scaler is not None:
+                df = pd.DataFrame(self.scaler.transform(df), index=df.index, columns=df.columns)
+        elif self.set_type == 2:
+            df = df.iloc[self.split - self.seq_len:]
+            if self.scaler is not None:
+                df = pd.DataFrame(self.scaler.transform(df), index=df.index, columns=df.columns)
+
+        target_col = "depeg_bps"
+        feature_cols = [c for c in df.columns if c != target_col] + [target_col]
+
+        self.feature_cols = feature_cols
+        self.covariate_cols = feature_cols[:-1]
+        self.target_col = target_col
+
+        self.data_x = df[self.feature_cols].to_numpy(dtype=np.float32)
+        self.data_y = df[self.target_col].to_numpy(dtype=np.float32)
 
     def __getitem__(self, index):
         

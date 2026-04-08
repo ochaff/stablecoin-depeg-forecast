@@ -22,19 +22,41 @@ class DataModule_forecast(L.LightningDataModule):
         print(self.splitval)
         print(self.split)
         # self.save_hyperparameters()
-    def setup(self, stage : str):
-        if stage == 'fit' :
-            self.dataset_train = Dataset_forecast(self.dataset_path, flag = 'train', size = [self.input_len, self.pred_len, self.label_len],
-                                                      split = self.split, splitval=self.splitval, scaler = None,
-                                                      )
-            self.dataset_val = Dataset_forecast(self.dataset_path, flag = 'val', size = [self.input_len, self.pred_len, self.label_len], 
-                                                   split = self.split,  splitval=self.splitval, scaler = None, 
-                                                   )
-        if stage == 'test' :
-            self.dataset_test = Dataset_forecast(self.dataset_path, flag = 'test', size = [self.input_len, self.pred_len, self.label_len],
-                                                     split = self.split,  splitval=self.splitval, scaler = None,
-                                                     )
-        
+
+    def setup(self, stage: str):
+        if stage == 'fit':
+            self.dataset_train = Dataset_forecast(
+                self.dataset_path, flag='train',
+                size=[self.input_len, self.pred_len, self.label_len],
+                split=self.split, splitval=self.splitval, scaler=None,
+            )
+            self.dataset_val = Dataset_forecast(
+                self.dataset_path, flag='val',
+                size=[self.input_len, self.pred_len, self.label_len],
+                split=self.split, splitval=self.splitval, scaler=None,
+            )
+
+            self.feature_cols = self.dataset_train.feature_cols
+            self.covariate_cols = self.dataset_train.covariate_cols
+            self.target_col = self.dataset_train.target_col
+
+        if stage == 'test':
+            self.dataset_test = Dataset_forecast(
+                self.dataset_path, flag='test',
+                size=[self.input_len, self.pred_len, self.label_len],
+                split=self.split, splitval=self.splitval, scaler=None,
+            )
+
+            self.feature_cols = self.dataset_test.feature_cols
+            self.covariate_cols = self.dataset_test.covariate_cols
+            self.target_col = self.dataset_test.target_col
+    
+    def get_feature_metadata(self):
+        return {
+            "feature_cols": getattr(self, "feature_cols", None),
+            "covariate_cols": getattr(self, "covariate_cols", None),
+            "target_col": getattr(self, "target_col", None),
+        }    
     def train_dataloader(self):
         return DataLoader(
         self.dataset_train,

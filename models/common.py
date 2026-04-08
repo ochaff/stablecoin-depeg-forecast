@@ -16,12 +16,13 @@ import shap
 from pathlib import Path
 from sklearn.metrics import roc_auc_score, average_precision_score, confusion_matrix, roc_curve, precision_recall_curve, auc, average_precision_score
 from models.utils import (
-    chebyshev_lobatto_u, uniform_u, cdf_from_quantile_on_grid,
+    chebyshev_lobatto_u, uniform_u, cdf_from_quantile_on_grid, bps_to_logprice,
     _ensure_dir, _batched_range, plot_quantile_cdf_pdf, plot_fan_chart, 
     plot_pit_hist, logit_u, power_tails_u, plot_pit_ecdf, 
     plot_tail_exceedance_calibration, plot_tail_exceedance_ratio,
     plot_pit_hist_from_values, plot_pit_ecdf_from_values, compute_spliced_pit_batched,
-    plot_es_diagnostics, plot_var_es_timeline, compute_spliced_var_es_batched, build_spliced_tail_plot_grid, plot_tail_cdf_survival
+    plot_es_diagnostics, plot_var_es_timeline, compute_spliced_var_es_batched, build_spliced_tail_plot_grid, plot_tail_cdf_survival,
+    plot_cross_attention_sample, plot_cross_attention_over_test, plot_gate_open_rate_bar, plot_topk_variable_traces_over_test, plot_variable_heatmap_over_test
     )
 from models.helper_classes import RevIN, ChebyshevQuantile, ISplineQuantile, SplicedGPDQuantile, ShapProbWrapper
 from models.losses import GaussianCRPS, GaussianTWCRPS, CRPSFromQuantiles, ThresholdWeightedCRPSFromQuantiles, BinaryFocalLoss, ChainingFunction
@@ -35,7 +36,8 @@ class Baseclass_forecast(L.LightningModule):
                 n_cheb, twcrps_threshold_low, twcrps_threshold_high, twcrps_side, twcrps_smooth_h, u_grid_size, dist_loss, grid_density, revin_type, 
                 quantile_decomp, spline_degree, knot_kind, knot_p, 
                 tail_model, gpd_u_low, gpd_u_high, gpd_xi_min, gpd_xi_max,
-                cdf_grid_size=512, cdf_grid_min=None, cdf_grid_max=None,
+                cdf_grid_size=512, cdf_grid_min=None, cdf_grid_max=None, 
+                l0_lambda = 0.0, save_test_diagnostics=False, diag_top_k_vars=20, diag_max_plot_samples=1000,use_log_price = False,
                 **kwargs
                 ):
         super().__init__()
@@ -57,7 +59,17 @@ class Baseclass_forecast(L.LightningModule):
         self.gpd_u_high = gpd_u_high
         self.gpd_xi_min = gpd_xi_min
         self.gpd_xi_max = gpd_xi_max
-        self.knot_p = knot_p   
+        self.l0_lambda = l0_lambda
+        self.save_test_diagnostics = bool(save_test_diagnostics)
+        self.diag_top_k_vars = int(diag_top_k_vars)
+        self.diag_max_plot_samples = int(diag_max_plot_samples)
+        self.knot_p = knot_p  
+        # Convert TWCRPS thresholds and smooth_h from bps to log-price for internal use 
+        if use_log_price:
+            twcrps_threshold_low  = bps_to_logprice(twcrps_threshold_low)
+            twcrps_threshold_high = bps_to_logprice(twcrps_threshold_high)
+            twcrps_smooth_h = bps_to_logprice(twcrps_smooth_h)
+
         if self.forecast_task == 'distribution':
             if self.grid_density == 'chebyshev':
                 u = chebyshev_lobatto_u(u_grid_size)
@@ -132,40 +144,123 @@ class Baseclass_forecast(L.LightningModule):
         self.method = method
         self.save_hyperparameters()
 
+    def _compute_pred_loss(self, outputs, batch_y):
+        if self.forecast_task == 'distribution':
+            Q, q = self.quantile(outputs)
+            pred_loss = self.criterion(Q, q, batch_y)
+        elif self.forecast_task == 'gaussian':
+            pred_loss = self.criterion(outputs, batch_y)
+        else:
+            pred_loss = self.criterion(outputs, batch_y)
+        return pred_loss
+        
+    def _get_covariate_names_for_plots(self):
+        """
+        Returns names for the covariate branch only.
+        Expected length = number of non-target input channels.
+        """
+        if hasattr(self, "var_names") and self.var_names is not None:
+            return [str(x) for x in self.var_names]
+
+        if hasattr(self, "model") and hasattr(self.model, "var_names") and self.model.var_names is not None:
+            return [str(x) for x in self.model.var_names]
+
+        return None
+
+
+    def _get_target_name_for_plots(self):
+        if hasattr(self, "target_name") and self.target_name is not None:
+            return str(self.target_name)
+
+        if hasattr(self, "model") and hasattr(self.model, "target_name") and self.model.target_name is not None:
+            return str(self.model.target_name)
+
+        return None
+
+    def _append_test_diagnostics(self):
+        aux = getattr(self.model, "latest_aux", None)
+        if aux is None or not isinstance(aux, dict):
+            return
+
+        for key in ["selection_weights", "hard_gates", "expected_open"]:
+            val = aux.get(key, None)
+            if torch.is_tensor(val):
+                self.test_diag_buffers[key].append(val.detach().cpu())
+
+        cross_maps = aux.get("cross_attn_maps", None)
+        if isinstance(cross_maps, list):
+            cross_maps = [m.detach().cpu() for m in cross_maps if torch.is_tensor(m)]
+            if len(cross_maps) > 0:
+                self.test_diag_buffers["cross_attn_last"].append(cross_maps[-1])
+                self.test_diag_buffers["cross_attn_mean_layers"].append(
+                    torch.stack(cross_maps, dim=0).mean(dim=0)
+                )
+
+    def _finalize_test_diagnostics(self):
+        diag = {}
+        for key, vals in self.test_diag_buffers.items():
+            if len(vals) == 0:
+                continue
+            diag[key] = torch.cat(vals, dim=0).numpy()
+        return diag
+
+    def _get_auxiliary_losses(self, device):
+        zero = torch.zeros((), device=device)
+
+        if not hasattr(self.model, "get_auxiliary_losses"):
+            return {"l0_penalty": zero}
+
+        aux = self.model.get_auxiliary_losses()
+        if aux is None:
+            return {"l0_penalty": zero}
+
+        out = {}
+        for k, v in aux.items():
+            if v is None:
+                out[k] = zero
+            elif torch.is_tensor(v):
+                out[k] = v
+            else:
+                out[k] = torch.tensor(float(v), device=device)
+
+        if "l0_penalty" not in out:
+            out["l0_penalty"] = zero
+
+        return out
+
+
+    def _compute_total_loss(self, outputs, batch_y):
+        pred_loss = self._compute_pred_loss(outputs, batch_y)
+        aux_losses = self._get_auxiliary_losses(device=batch_y.device)
+        l0_penalty = aux_losses.get("l0_penalty", torch.zeros((), device=batch_y.device))
+        total_loss = pred_loss + self.l0_lambda * l0_penalty
+        return pred_loss, l0_penalty, total_loss
+
     def training_step(self, batch, batch_idx):
         batch_x, batch_y = batch
         batch_x = batch_x.float()
         batch_y = batch_y.float()
 
         outputs = self.model(batch_x)
+        pred_loss, l0_penalty, total_loss = self._compute_total_loss(outputs, batch_y)
 
-        if self.forecast_task == 'distribution':
-            Q, q = self.quantile(outputs)
-            loss = self.criterion(Q, q, batch_y)
-        elif self.forecast_task == 'gaussian':
-            loss = self.criterion(outputs, batch_y)
-        else:
-            loss = self.criterion(outputs, batch_y)
+        self.log('train_pred_loss', pred_loss, on_epoch=True, prog_bar=False)
+        self.log('train_l0_penalty', l0_penalty, on_epoch=True, prog_bar=False)
+        self.log('train_loss', total_loss, on_epoch=True, prog_bar=True)
 
-        self.log('train_loss', loss, on_epoch = True)
-        return loss
-
+        return total_loss
+    
     def validation_step(self, batch, batch_idx):
         batch_x, batch_y = batch
         batch_x = batch_x.float()
         batch_y = batch_y.float()
 
         outputs = self.model(batch_x)
+        pred_loss, l0_penalty, total_loss = self._compute_total_loss(outputs, batch_y)
 
-        if self.forecast_task == 'distribution':
-            Q, q = self.quantile(outputs)
-            loss = self.criterion(Q, q, batch_y)
-        elif self.forecast_task == 'gaussian':
-            loss = self.criterion(outputs, batch_y)
-        else:
-            loss = self.criterion(outputs, batch_y)
-
-        self.log('val_loss', loss)
+        self.log('val_loss', pred_loss, prog_bar=True)
+        self.log('val_l0_penalty', l0_penalty, prog_bar=False)
+        self.log('val_loss_total', total_loss, prog_bar=False)
 
     def test_step(self, batch, batch_idx):
         batch_x, batch_y = batch
@@ -173,18 +268,13 @@ class Baseclass_forecast(L.LightningModule):
         batch_y = batch_y.float()
 
         outputs = self.model(batch_x)
+        pred_loss, l0_penalty, total_loss = self._compute_total_loss(outputs, batch_y)
 
-        if self.forecast_task == 'distribution':
-            Q, q = self.quantile(outputs)
-            test_loss = self.criterion(Q, q, batch_y)
-        elif self.forecast_task == 'gaussian':
-            test_loss = self.criterion(outputs, batch_y)
-        else:
-            test_loss = self.criterion(outputs, batch_y)
+        self.log('test_loss', pred_loss)
+        self.log('test_l0_penalty', l0_penalty)
+        self.log('test_loss_total', total_loss)
 
-        self.log('test_loss', test_loss)
-
-        # store raw outputs (params) for distribution; store point/quantiles otherwise
+        # store raw outputs
         if batch_idx == 0:
             self.x_test = batch_x.detach().cpu()
             self.y_test = batch_y.detach().cpu()
@@ -194,6 +284,21 @@ class Baseclass_forecast(L.LightningModule):
             self.y_test = torch.cat((self.y_test, batch_y.detach().cpu()), dim=0)
             self.y_pred = torch.cat((self.y_pred, outputs.detach().cpu()), dim=0)
 
+        if self.save_test_diagnostics:
+            self._append_test_diagnostics()
+
+    def on_test_epoch_start(self):
+        self.x_test = None
+        self.y_test = None
+        self.y_pred = None
+
+        self.test_diag_buffers = {
+            "selection_weights": [],
+            "hard_gates": [],
+            "expected_open": [],
+            "cross_attn_last": [],
+            "cross_attn_mean_layers": [],
+        }
 
     def on_test_epoch_end(self):
         run_dir = f'./{self.logger.experiment_id}/{self.logger.run_id}'
@@ -207,6 +312,14 @@ class Baseclass_forecast(L.LightningModule):
             'pred': np.array(self.y_pred),
             'seq':  np.array(self.x_test),
         }
+        var_names = self._get_covariate_names_for_plots()
+        target_name = self._get_target_name_for_plots()
+
+        # if var_names is not None:
+        #     A["covariate_names"] = list(var_names)
+
+        # if target_name is not None:
+        #     A["target_name"] = target_name
 
         if self.forecast_task == 'distribution':
             params_np = A['pred']                      # (B,H,P)
@@ -757,6 +870,70 @@ class Baseclass_forecast(L.LightningModule):
             A["pit_h0"] = pit_vals
             A["pit_stats_h0"] = pit_stats
 
+        if self.save_test_diagnostics:
+            diagnostics = self._finalize_test_diagnostics()
+            A["diagnostics"] = diagnostics
+            diag = A["diagnostics"]
+
+
+            if "selection_weights" in diag:
+                plot_variable_heatmap_over_test(
+                    diag["selection_weights"],
+                    out_path=os.path.join(plots_dir, "selection_weights_heatmap.png"),
+                    var_names=var_names,
+                    title="Selection weights over test windows",
+                    top_k=self.diag_top_k_vars,
+                    max_rows=self.diag_max_plot_samples,
+                )
+                plot_topk_variable_traces_over_test(
+                    diag["selection_weights"],
+                    out_path=os.path.join(plots_dir, "selection_weights_traces.png"),
+                    var_names=var_names,
+                    title="Top selection weights over test windows",
+                    top_k=min(8, self.diag_top_k_vars),
+                    smooth=11,
+                )
+
+            if "hard_gates" in diag:
+                plot_variable_heatmap_over_test(
+                    diag["hard_gates"],
+                    out_path=os.path.join(plots_dir, "hard_gates_heatmap.png"),
+                    var_names=var_names,
+                    title="Hard gates over test windows",
+                    top_k=self.diag_top_k_vars,
+                    max_rows=self.diag_max_plot_samples,
+                )
+                plot_gate_open_rate_bar(
+                    diag["hard_gates"],
+                    out_path=os.path.join(plots_dir, "hard_gates_open_rate.png"),
+                    var_names=var_names,
+                    title="Mean hard-gate openness",
+                    top_k=self.diag_top_k_vars,
+                )
+
+            if "cross_attn_mean_layers" in diag:
+                plot_cross_attention_over_test(
+                    diag["cross_attn_mean_layers"],
+                    out_path=os.path.join(plots_dir, "cross_attention_over_test_meanH.png"),
+                    var_names=var_names,
+                    title="Cross-attention over test windows",
+                    horizon_reduce="mean",
+                    top_k=self.diag_top_k_vars,
+                    max_rows=self.diag_max_plot_samples,
+                )
+
+                # representative sample: highest |target| event
+                y_true_np = np.array(self.y_test)
+                sample_idx = int(np.argmax(np.max(np.abs(y_true_np), axis=1))) if y_true_np.ndim == 2 else 0
+
+                plot_cross_attention_sample(
+                    diag["cross_attn_mean_layers"][sample_idx],
+                    out_path=os.path.join(plots_dir, f"cross_attention_sample_{sample_idx}.png"),
+                    var_names=var_names,
+                    title=f"Cross-attention sample {sample_idx}",
+                    top_k=self.diag_top_k_vars,
+                )
+
         # ---- save pickle ----
         out_path = os.path.join(run_dir, "preds_test_set.pkl")
         with open(out_path, 'wb') as f:
@@ -799,10 +976,10 @@ class Baseclass_forecast(L.LightningModule):
 
         loss_parser = parent_parser.add_argument_group('Training loss arguments')
         loss_parser.add_argument('--dist_loss', type=str, default='twcrps', choices=['crps','twcrps'], help='which distributional loss to use for distribution forecasting')
-        loss_parser.add_argument('--twcrps_threshold_low', type=float, default=-10.0, help='lower threshold for twCRPS loss (for price target)')
-        loss_parser.add_argument('--twcrps_threshold_high', type=float, default=10.0, help='upper threshold for twCRPS loss (for price target)')
+        loss_parser.add_argument('--twcrps_threshold_low', type=float, default=-10.0, help='lower threshold for twCRPS loss (for price target), in depeg bps (conversion to log is done internally)')
+        loss_parser.add_argument('--twcrps_threshold_high', type=float, default=10.0, help='upper threshold for twCRPS loss (for price target), in depeg bps (conversion to log is done internally)')
         loss_parser.add_argument('--twcrps_side', type=str, default='two_sided', choices=['below','above', 'two_sided'], help='side of the distribution to consider for twCRPS loss')
-        loss_parser.add_argument('--twcrps_smooth_h', type=float, default=2, help='smoothing parameter for twCRPS loss')
+        loss_parser.add_argument('--twcrps_smooth_h', type=float, default=2, help='smoothing parameter for twCRPS loss, in depeg bps (conversion to log is done internally)')
         loss_parser.add_argument('--tau_pinball', type=float, help='tau parameter for pinball loss (quantile/expectile regression)', default=0.05)
         
         distribution_parser = parent_parser.add_argument_group('Non parametric quantile function arguments (for distribution forecasting)')
@@ -820,6 +997,16 @@ class Baseclass_forecast(L.LightningModule):
         tail_parser.add_argument('--gpd_u_high', type=float, default=0.99, help='upper splice point for GPD tail model (as quantile level)')
         tail_parser.add_argument('--gpd_xi_min', type=float, default=-0.25, help='minimum shape parameter for GPD tail model')
         tail_parser.add_argument('--gpd_xi_max', type=float, default=0.50, help='maximum shape parameter for GPD tail model')
+
+        diag_parser = parent_parser.add_argument_group('Model regularization / diagnostics')
+        diag_parser.add_argument('--l0_lambda', type=float, default=0.0,
+                                help='weight for hard-concrete L0 penalty')
+        diag_parser.add_argument('--save_test_diagnostics', type=int, choices=[0,1], default=0,
+                                help='whether to save model diagnostics on test set')
+        diag_parser.add_argument('--diag_top_k_vars', type=int, default=20,
+                                help='top-k variables to show in diagnostic plots')
+        diag_parser.add_argument('--diag_max_plot_samples', type=int, default=2000,
+                                help='max number of test windows to show in heatmap diagnostics')
         return parent_parser
 
 

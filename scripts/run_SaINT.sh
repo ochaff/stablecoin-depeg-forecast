@@ -1,12 +1,12 @@
-for alpha in 0.5 0.3 1.0 
+for alpha in 0.3 
 do
 for task in distribution
 do
-for model in TSMixer
+for model in SAINT
 do
 for loss in twcrps
 do
-for tail in none gpd
+for tail in gpd
 do
 for decomp in spline
 do
@@ -14,7 +14,13 @@ for revin in revin
 do
 for knot_p in 3.0
 do
-for grid in power-tail 
+for grid in power-tail uniform
+do
+for selector in sparsemax
+do
+for gate in 1
+do
+for lam in 1e-4
 do
 
 python main_lightning.py \
@@ -23,7 +29,7 @@ python main_lightning.py \
     --model_name $model \
     --method forecast \
     --experiment_name stablecoin-models \
-    --run_name "${model}_alpha_${alpha}_${task}_${loss}_${decomp}_${revin}_${grid}_${tail}" \
+    --run_name "${model}_${selector}_gated_${gate}_lambda_${lam}" \
     --n_epochs 100 \
     --patience 5 \
     --verbose 1 \
@@ -47,12 +53,19 @@ python main_lightning.py \
     --knot_p $knot_p \
     --spline_degree 3 \
     --tail_model $tail \
-    --gpd_u_low 0.02 \
-    --gpd_u_high 0.98 \
+    --gpd_u_low 0.03 \
+    --gpd_u_high 0.97 \
     --gpd_xi_min -0.25 \
     --gpd_xi_max 0.5 \
     --remote_logging \
+    --selector_activation $selector \
+    --use_hard_concrete $gate \
+    --l0_lambda $lam \
+    --save_test_diagnostics 1 \
 
+done
+done
+done
 done
 done
 done
