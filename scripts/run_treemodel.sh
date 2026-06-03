@@ -1,5 +1,5 @@
-for alpha in  0.5 1.5
-do 
+for alpha in 0.1
+do
 for model in xgboost lightgbm catboost random_forest
 do
 

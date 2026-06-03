@@ -237,6 +237,42 @@ class ThresholdWeightedCRPSFromQuantiles(nn.Module):
         return loss
 
 
+class ScaledThresholdWeightedCRPSFromQuantiles(nn.Module):
+    def __init__(self, u: torch.Tensor, wu: torch.Tensor, crps_convention: bool = True, 
+                threshold_low: float = None, threshold_high: float = None, 
+                side: str = "two_sided", smooth_h: float = 0.0):
+        super().__init__()
+        self.register_buffer("u", u)    # (J,)
+        self.register_buffer("wu", wu)  # (J,)
+        self.crps_convention = crps_convention
+        self.threshold_low = threshold_low
+        self.threshold_high = threshold_high
+        self.side = side
+        self.smooth_h = smooth_h
+        self.eps = 1e-6
+        self.chain = ChainingFunction(threshold_low=threshold_low, 
+                                      threshold_high=threshold_high, 
+                                      side=side, 
+                                      smooth_h=smooth_h
+                                      )
+
+    def forward(self, Q: torch.Tensor, q:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        # Q: (B,H,J), y: (B,H)
+        u = self.u.view(1, 1, -1)                 # (1,1,J)
+        y_ = y.unsqueeze(-1).repeat(1,1,u.shape[-1])                      # (B,H,J)
+
+        e = self.chain(y_) - self.chain(Q)    
+        pinball = torch.maximum(u*e, (u-1)*e)                            # (B,H,J)
+
+        loss_bh = torch.sum(pinball * self.wu.view(1, 1, -1), dim=-1)  # (B,H)
+        entropy_bh = torch.sum(self.wu.view(1, 1, -1) * (2*u-1) * self.chain(Q), dim=-1)  # (B,H)
+        entropy_bh = entropy_bh.clamp_min(self.eps)
+        log_term = 0.5 * torch.log(2.0 * entropy_bh) 
+        scaled_loss_bh = loss_bh / entropy_bh + log_term 
+        scaled_loss = scaled_loss_bh.mean()
+
+        return scaled_loss
+
 class ChainingFunction(nn.Module):
     """
     v(x) =

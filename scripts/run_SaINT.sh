@@ -1,4 +1,5 @@
-for alpha in 0.3 
+
+for alpha in 0.1
 do
 for task in distribution
 do
@@ -14,24 +15,25 @@ for revin in revin
 do
 for knot_p in 3.0
 do
-for grid in power-tail uniform
+for grid in power-tail
 do
-for selector in sparsemax
+for selector in softmax
 do
 for gate in 1
 do
-for lam in 1e-4
+for lam in 1e-6
 do
-
+for size in 1200
+do
 python main_lightning.py \
     --alpha $alpha \
     --forecast_task $task \
     --model_name $model \
     --method forecast \
-    --experiment_name stablecoin-models \
-    --run_name "${model}_${selector}_gated_${gate}_lambda_${lam}" \
+    --experiment_name stablecoin-paper \
+    --run_name "${model}_${selector}_gated_${gate}_lambda_${lam}_${loss}" \
     --n_epochs 100 \
-    --patience 5 \
+    --patience 10 \
     --verbose 1 \
     --check_lr \
     --seq_len  64 \
@@ -49,20 +51,29 @@ python main_lightning.py \
     --u_grid_size 256 \
     --grid_density $grid \
     --quantile_decomp $decomp \
-    --knot_kind uniform \
+    --knot_kind $grid \
     --knot_p $knot_p \
     --spline_degree 3 \
     --tail_model $tail \
-    --gpd_u_low 0.03 \
-    --gpd_u_high 0.97 \
-    --gpd_xi_min -0.25 \
-    --gpd_xi_max 0.5 \
+    --gpd_u_low 0.01 \
+    --gpd_u_high 0.99 \
+    --gpd_xi_min 0.0 \
+    --gpd_xi_max 0.75 \
     --remote_logging \
     --selector_activation $selector \
+    --attn_activation softmax \
     --use_hard_concrete $gate \
     --l0_lambda $lam \
     --save_test_diagnostics 1 \
+    --d_model $size \
+    --target_hidden_size $size \
+    --cov_d_ff $size \
+    --selector_hidden $size \
+    --fusion_d_ff $size \
+    --dropout 0.1 \
+    --target_pooling_mode AvgPool1d \
 
+done
 done
 done
 done

@@ -6,7 +6,7 @@ import math
 import numpy as np
 
 from models.utils import (
-    make_open_nonuniform_knots, chebyshev_basis, 
+    chebyshev_basis, 
     cdf_from_quantile_on_grid, _interp_idx_w,
     make_open_nonuniform_knots, mspline_ispline_on_grid
     )
@@ -139,7 +139,7 @@ class ChebyshevQuantile(nn.Module):
           q: (B,H,J)  (quantile density)
         """
         b = params[..., 0]                           # (B,H)
-        s = F.softplus(params[..., 1]) + self.eps     # (B,H)
+        s = params[..., 1] + self.eps     # (B,H)
         a = params[..., 2:]                          # (B,H,K)
 
 
@@ -265,7 +265,7 @@ class ISplineQuantile(nn.Module):
           q: (B,H,J)  quantile density dQ/du >= 0
         """
         b = params[..., 0]                           # (B,H)
-        s = F.softplus(params[..., 1]) + self.eps     # (B,H)
+        s = params[..., 1] + self.eps     # (B,H)
         a_raw = params[..., 2:]                       # (B,H,K)
 
         # nonnegative coefficients => monotone Q(u)

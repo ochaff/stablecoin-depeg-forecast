@@ -10,6 +10,111 @@ def add_swap_size_metrics():
     df_integral = pd.read_parquet('./data/Uniswap/swap_size_metrics.parquet')
     return df_integral
 
+
+def add_liq_ownership_features():
+    """Compute liquidity ownership features from Uniswap positions and Curve gauge data."""
+    # --- 1) 3CRV gauge share ---
+    crv_lp = pd.read_parquet('./data/Curve/3CRV_lpevents.parquet')
+    threep = pd.read_parquet('./data/Curve/curve_3pool_hourly.parquet')
+    hourly_blocks = pd.read_parquet('./data/ETH_blocks/hourly_blocks.parquet')
+
+    GAUGE = "0xbfcf63294ad7105dea65aa58f8ae5be2d9d0952a"
+    gauge_mask = (crv_lp["from_address"] == GAUGE) | (crv_lp["to_address"] == GAUGE)
+    gauge_flows = crv_lp.loc[gauge_mask, ["block_number", "from_address", "to_address", "lp_amount"]].copy()
+
+    gauge_flows["signed_flow"] = np.where(
+        gauge_flows["to_address"] == GAUGE,
+        gauge_flows["lp_amount"],
+        -gauge_flows["lp_amount"],
+    )
+
+    hb = hourly_blocks[["hour_utc", "block_number"]].dropna(subset=["block_number"]).sort_values("hour_utc").reset_index(drop=True)
+    hb["block_number"] = hb["block_number"].astype(int)
+
+    block_edges = hb["block_number"].values
+    event_blocks = gauge_flows["block_number"].values.astype(int)
+    bucket_idx = np.searchsorted(block_edges, event_blocks, side="right") - 1
+    bucket_idx = np.clip(bucket_idx, 0, len(hb) - 1)
+    gauge_flows["hour_idx"] = bucket_idx
+
+    agg = gauge_flows.groupby("hour_idx")["signed_flow"].sum()
+
+    hourly_gauge = hb[["hour_utc"]].copy()
+    hourly_gauge["hourly_net_flow_to_gauge"] = 0.0
+    hourly_gauge.loc[agg.index, "hourly_net_flow_to_gauge"] = agg.values
+    hourly_gauge["hourly_stock_gauge"] = hourly_gauge["hourly_net_flow_to_gauge"].cumsum()
+    hourly_gauge.index = pd.to_datetime(hourly_gauge["hour_utc"], utc=True)
+
+    threep.index = pd.to_datetime(threep.index, utc=True)
+    hourly_gauge = hourly_gauge.join(threep[["totalValueLockedUSD"]], how="left")
+    hourly_gauge["gauge_share_3crv"] = hourly_gauge["hourly_stock_gauge"] / hourly_gauge["totalValueLockedUSD"]
+
+    gauge_feature = hourly_gauge[["gauge_share_3crv"]]
+
+    # --- 2) Uniswap position concentration metrics ---
+    pos = pd.read_parquet('./data/Uniswap/hourly_positions_full.parquet')
+    pool = pd.read_parquet('./data/Uniswap/hourly_pool_state_full.parquet')
+
+    pos["hour_utc"] = pd.to_datetime(pos["hour_utc"], utc=True)
+    pool["hour"] = pd.to_datetime(pool["hour"], utc=True)
+    pos["liquidity"] = pos["liquidity"].astype(float)
+
+    # Position age
+    pos["birth_hour"] = pos.groupby("id")["hour_utc"].transform("min")
+    pos["age_hours"] = (pos["hour_utc"] - pos["birth_hour"]).dt.total_seconds() / 3600
+
+    pos_pool = pos.merge(
+        pool[["hour", "poolTick"]].rename(columns={"hour": "hour_utc"}),
+        on="hour_utc",
+        how="inner",
+    )
+
+    in_range = pos_pool.loc[
+        (pos_pool["tickLower"] <= pos_pool["poolTick"]) &
+        (pos_pool["poolTick"] <= pos_pool["tickUpper"])
+    ].copy()
+
+    in_range["tick_width"] = in_range["tickUpper"] - in_range["tickLower"]
+    in_range["liq_x_width"] = in_range["liquidity"] * in_range["tick_width"]
+    in_range["liq_x_age"] = in_range["liquidity"] * in_range["age_hours"]
+
+    # Hourly base metrics
+    hourly_base = in_range.groupby("hour_utc", as_index=False).agg(
+        total_liq=("liquidity", "sum"),
+        n_in_range=("id", "size"),
+        liq_x_width_sum=("liq_x_width", "sum"),
+        liq_x_age_sum=("liq_x_age", "sum"),
+    )
+    hourly_base["weighted_mean_tick_width"] = hourly_base["liq_x_width_sum"] / hourly_base["total_liq"]
+    hourly_base["weighted_mean_age_hours"] = hourly_base["liq_x_age_sum"] / hourly_base["total_liq"]
+    hourly_base.loc[hourly_base["total_liq"] == 0, ["weighted_mean_tick_width", "weighted_mean_age_hours"]] = np.nan
+
+    # HHI per hour
+    owner_hour = in_range.groupby(["hour_utc", "owner"], as_index=False).agg(owner_liq=("liquidity", "sum"))
+    owner_hour["total_liq"] = owner_hour.groupby("hour_utc")["owner_liq"].transform("sum")
+    owner_hour["share"] = owner_hour["owner_liq"] / owner_hour["total_liq"]
+    hhi = (
+        owner_hour.assign(share_sq=owner_hour["share"] ** 2)
+        .groupby("hour_utc", as_index=False)
+        .agg(hhi=("share_sq", "sum"))
+    )
+
+    hourly_conc = hourly_base.merge(hhi, on="hour_utc", how="left")
+    hourly_conc.index = pd.to_datetime(hourly_conc["hour_utc"], utc=True)
+
+    # Build output features
+    out = pd.DataFrame(index=hourly_conc.index)
+    out["hhi_24h_rolling_mean"] = hourly_conc["hhi"].rolling(24, min_periods=1).mean()
+    out["tick_width_24h_rolling_median"] = hourly_conc["weighted_mean_tick_width"].rolling(24, min_periods=1).median().clip(upper=200)
+    out["n_in_range_log_return"] = hourly_conc["n_in_range"].pct_change()
+    out["weighted_mean_age_hours"] = hourly_conc["weighted_mean_age_hours"].values
+
+    # Join gauge feature
+    out = out.join(gauge_feature, how="outer")
+    out = out.sort_index()
+
+    return out
+
 def attach_feature_names(lightning_model, datamodule):
     feature_cols = getattr(datamodule, "feature_cols", None)
     covariate_cols = getattr(datamodule, "covariate_cols", None)
@@ -370,7 +475,7 @@ def build_dataset(
             alpha, aave, aave_liq, crv, eth_price, 
             eth_indicators, btc_price, btc_indicators, usd_index, usd_indicators, fear_greed, gegen, target, 
             target_window, target_threshold, depeg_side, dynamic_threshold,
-            gegen_indicators, swap_size, use_log_price,
+            gegen_indicators, swap_size, use_log_price, liq_ownership,
             bypass = False,
             **kwargs):
         dataset = load_uniswap_metrics()
@@ -470,6 +575,13 @@ def build_dataset(
             except Exception as e:      
                 print(e)
                 print('--- could not join uniswap swap size curve metrics ---')
+        if liq_ownership:
+            try:
+                liq_own_features = add_liq_ownership_features()
+                dataset = dataset.join(liq_own_features)
+            except Exception as e:
+                print(e)
+                print('--- could not join liquidity ownership features ---')
         
         try:
             dataset = dataset.join(add_forecasting_target(use_log_price), how='left')
@@ -479,7 +591,10 @@ def build_dataset(
             
         if target:
             w = int(target_window)        # hours
-            thr = int(target_threshold)   # bps
+            if use_log_price:
+                thr = np.log1p(int(target_threshold)/10000)   # bps
+            else:    
+                thr = int(target_threshold)   # bps
             x = dataset["depeg_bps"].astype(float)      # depeg in bps (can be + or -)
             upper = x.rolling(30*24, min_periods=1).quantile(0.9975)
             lower = x.rolling(30*24, min_periods=1).quantile(0.0025)
@@ -577,6 +692,7 @@ def add_dataset_args(parser):
     dataset_building.add_argument('--usd_index',action='store_false', help='remove USD index oracle')
     dataset_building.add_argument('--usd_indicators',action='store_false', help='remove USD index technical indicators')
     dataset_building.add_argument('--swap_size',action='store_false', help='remove Uniswap swap size metrics')
+    dataset_building.add_argument('--liq_ownership',action='store_false', help='remove liquidity ownership features (gauge share, HHI, tick width, position count, age)')
     dataset_building.add_argument('--fear_greed',action='store_false', help='remove Fear and Greed index')
     dataset_building.add_argument('--gegen',action='store_false', help='remove Gegenbauer liquidity curve scores')
     dataset_building.add_argument('--gegen_indicators',action='store_false', help='remove Gegenbauer liquidity curve time series features')

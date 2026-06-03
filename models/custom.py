@@ -174,8 +174,8 @@ class MultiHeadSparseAttention(nn.Module):
         self.attn_activation = attn_activation
 
         self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model, bias = False)
+        self.v_proj = nn.Linear(d_model, d_model, bias = False)
         self.o_proj = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
 
@@ -292,6 +292,12 @@ class NHiTSLatentBlock(nn.Module):
     """
     NHITS-like residual block:
       residual target -> pooled summary -> backcast + latent horizon representation
+
+    `pooled_size` is interpreted as a pooling/downsampling factor
+    (NHITS-style), not as a target pooled length.
+
+    Forecast latent resolution is tied to the same stack scale:
+      n_knots = ceil(pred_len / pooled_size)
     """
 
     def __init__(
@@ -301,21 +307,38 @@ class NHiTSLatentBlock(nn.Module):
         pooled_size: int,
         hidden_size: int,
         d_model: int,
-        n_knots: int,
         n_mlp_layers: int = 2,
         dropout: float = 0.1,
+        pooling_mode: str = "AvgPool1d",   # or "AvgPool1d"
     ):
         super().__init__()
+
+        if pooled_size < 1:
+            raise ValueError("pooled_size must be >= 1")
+        if pooling_mode not in {"MaxPool1d", "AvgPool1d"}:
+            raise ValueError("pooling_mode must be one of {'MaxPool1d', 'AvgPool1d'}")
+
         self.seq_len = seq_len
         self.pred_len = pred_len
+        self.pooled_size = pooled_size
         self.d_model = d_model
-        self.n_knots = n_knots
 
-        self.avg_pool = nn.AdaptiveAvgPool1d(pooled_size)
-        self.max_pool = nn.AdaptiveMaxPool1d(pooled_size)
+        # NHITS-style pooling: downsample by factor `pooled_size`
+        self.pooling_layer = getattr(nn, pooling_mode)(
+            kernel_size=pooled_size,
+            stride=pooled_size,
+            ceil_mode=True,
+        )
+
+        # Length after pooling
+        self.pooled_hist_size = math.ceil(seq_len / pooled_size)
+
+        # Forecast basis resolution tied to same scale
+        # If you want exact floor behavior, replace ceil(...) with pred_len // pooled_size
+        self.n_knots = max(1, math.ceil(pred_len / pooled_size))
 
         layers = []
-        in_dim = 2 * pooled_size
+        in_dim = self.pooled_hist_size
         for i in range(n_mlp_layers):
             layers.append(nn.Linear(in_dim if i == 0 else hidden_size, hidden_size))
             layers.append(nn.GELU())
@@ -323,30 +346,30 @@ class NHiTSLatentBlock(nn.Module):
         self.mlp = nn.Sequential(*layers)
 
         self.backcast_proj = nn.Linear(hidden_size, seq_len)
-        self.forecast_knots_proj = nn.Linear(hidden_size, d_model * n_knots)
+        self.forecast_knots_proj = nn.Linear(hidden_size, d_model * self.n_knots)
 
     def forward(self, residual: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # residual: [B, L]
-        x = residual.unsqueeze(1)  # [B,1,L]
-        pooled = torch.cat(
-            [self.avg_pool(x).squeeze(1), self.max_pool(x).squeeze(1)],
-            dim=-1,
-        )  # [B, 2 * pooled_size]
+        x = residual.unsqueeze(1)  # [B, 1, L]
+
+        pooled = self.pooling_layer(x).squeeze(1)  # [B, pooled_hist_size]
 
         hidden = self.mlp(pooled)
         backcast = self.backcast_proj(hidden)  # [B, L]
 
-        knots = self.forecast_knots_proj(hidden).view(-1, self.d_model, self.n_knots)  # [B,D,K]
+        # [B, D, K]
+        knots = self.forecast_knots_proj(hidden).view(-1, self.d_model, self.n_knots)
+
+        # Upsample to full forecast horizon: [B, H, D]
         horizon_latent = F.interpolate(
             knots,
             size=self.pred_len,
             mode="linear",
             align_corners=False,
-        ).transpose(1, 2)  # [B,H,D]
+        ).transpose(1, 2)
 
         new_residual = residual - backcast
         return new_residual, horizon_latent
-
 
 class NHiTSTargetEncoder(nn.Module):
     def __init__(
@@ -356,11 +379,12 @@ class NHiTSTargetEncoder(nn.Module):
         d_model: int,
         pooled_sizes,
         hidden_size: int,
-        n_knots: int,
         n_mlp_layers: int,
         dropout: float,
+        pooling_mode: str = "AvgPool1d",
     ):
         super().__init__()
+
         self.blocks = nn.ModuleList([
             NHiTSLatentBlock(
                 seq_len=seq_len,
@@ -368,9 +392,9 @@ class NHiTSTargetEncoder(nn.Module):
                 pooled_size=p,
                 hidden_size=hidden_size,
                 d_model=d_model,
-                n_knots=n_knots,
                 n_mlp_layers=n_mlp_layers,
                 dropout=dropout,
+                pooling_mode=pooling_mode,
             )
             for p in pooled_sizes
         ])
@@ -387,7 +411,6 @@ class NHiTSTargetEncoder(nn.Module):
 
         latent_sum = self.norm(latent_sum)
         return latent_sum, residual  # [B,H,D], [B,L]
-
 
 # ============================================================
 # Covariate branch: variates as tokens + sparse selection
@@ -437,9 +460,16 @@ class VariableSelectionGate(nn.Module):
         ctx = context.unsqueeze(1).expand(b, v, d)
 
         transformed = self.var_grn(tokens, context=ctx)
+
         score_hidden = self.score_grn(tokens, context=ctx)
         logits = self.score_proj(score_hidden).squeeze(-1)  # [B,V]
-        weights = sparse_probability_map(logits, kind=self.selector_activation, dim=1)  # [B,V]
+
+        # Raw sparse/dense selector weights. Sum over variables = 1.
+        weights = sparse_probability_map(
+            logits,
+            kind=self.selector_activation,
+            dim=1,
+        )  # [B,V]
 
         if self.use_hard_concrete:
             log_alpha = self.log_alpha_net(torch.cat([tokens, ctx], dim=-1))  # [B,V,1]
@@ -448,15 +478,42 @@ class VariableSelectionGate(nn.Module):
             gates = torch.ones(b, v, 1, device=tokens.device, dtype=tokens.dtype)
             expected_open = gates
 
-        out = transformed * weights.unsqueeze(-1) * gates
+        gate_values = gates.squeeze(-1)                 # [B,V]
+        expected_values = expected_open.squeeze(-1)     # [B,V]
+
+        # Raw effective selection before renormalization.
+        effective_selection = weights * gate_values     # [B,V]
+        effective_mass = effective_selection.sum(dim=1) # [B]
+
+        # Actual selector weights applied to covariate tokens.
+        effective_selection_norm = effective_selection / (
+            effective_mass.unsqueeze(1) + 1e-8
+        )  # [B,V]
+
+        # Expected version, useful for diagnostics because L0 uses expected_open.
+        expected_effective_selection = weights * expected_values  # [B,V]
+        expected_effective_mass = expected_effective_selection.sum(dim=1)  # [B]
+
+        # This is now the actual scaling applied to transformed covariate tokens.
+        out = transformed * effective_selection_norm.unsqueeze(-1)
 
         aux = {
             "selection_logits": logits,
             "selection_weights": weights,
-            "hard_gates": gates.squeeze(-1),
-            "expected_open": expected_open.squeeze(-1),
+
+            "hard_gates": gate_values,
+            "expected_open": expected_values,
+
+            "effective_selection": effective_selection,
+            "effective_selection_norm": effective_selection_norm,
+            "effective_mass": effective_mass,
+
+            "expected_effective_selection": expected_effective_selection,
+            "expected_effective_mass": expected_effective_mass,
+
             "l0_penalty": expected_open.mean(),
         }
+
         return out, aux
 
 
@@ -480,10 +537,12 @@ class VariateTokenEncoder(nn.Module):
         attn_activation: str,
         selector_activation: str,
         use_hard_concrete: bool,
+        use_variate_self_attention: bool = False,
     ):
         super().__init__()
         self.seq_len = seq_len
         self.num_vars = num_vars
+        self.use_variate_self_attention = use_variate_self_attention
 
         self.time_norm = nn.LayerNorm(seq_len)
         self.time_proj = nn.Linear(seq_len, d_model)
@@ -519,11 +578,13 @@ class VariateTokenEncoder(nn.Module):
         tokens = tokens + self.var_embedding(var_ids).unsqueeze(0)
 
         tokens, aux = self.selector(tokens, context=context)
+        
+        if self.use_variate_self_attention:
+            # covariate self-attention, remove for interpretability of cross attention weights
+            for layer in self.layers:
+                tokens = layer(tokens)
 
-        for layer in self.layers:
-            tokens = layer(tokens)
-
-        tokens = self.norm(tokens)
+        # tokens = self.norm(tokens)
         return tokens, aux
 
 
@@ -567,10 +628,10 @@ class Model(nn.Module):
         n_cheb=2,
         tail_model='none',
         # target / NHITS
-        target_hidden_size=256,
-        target_pooled_sizes=(8, 16, 32),
-        target_n_knots=8,
+        target_hidden_size=512,
+        target_pooled_sizes=(8,4,2,1),
         target_n_mlp_layers=2,
+        target_pooling_mode="AvgPool1d",
         # covariate branch
         cov_n_layers=2,
         cov_n_heads=4,
@@ -616,9 +677,9 @@ class Model(nn.Module):
             d_model=d_model,
             pooled_sizes=target_pooled_sizes,
             hidden_size=target_hidden_size,
-            n_knots=target_n_knots,
             n_mlp_layers=target_n_mlp_layers,
             dropout=dropout,
+            pooling_mode=target_pooling_mode,
         )
 
         # Covariate branch
@@ -737,6 +798,14 @@ class Model(nn.Module):
                 "selection_weights": None,
                 "hard_gates": None,
                 "expected_open": None,
+
+                "effective_selection": None,
+                "effective_selection_norm": None,
+                "effective_mass": None,
+
+                "expected_effective_selection": None,
+                "expected_effective_mass": None,
+
                 "l0_penalty": torch.tensor(0.0, device=x_enc.device),
             }
 
@@ -759,17 +828,26 @@ class Model(nn.Module):
             "target_tokens": target_tokens,
             "target_context": target_context,
             "cov_tokens": cov_tokens,
-            "selection_logits": cov_aux["selection_logits"],
-            "selection_weights": cov_aux["selection_weights"],
-            "hard_gates": cov_aux["hard_gates"],
-            "expected_open": cov_aux["expected_open"],
+
+            "selection_logits": cov_aux.get("selection_logits", None),
+            "selection_weights": cov_aux.get("selection_weights", None),
+
+            "hard_gates": cov_aux.get("hard_gates", None),
+            "expected_open": cov_aux.get("expected_open", None),
+
+            "effective_selection": cov_aux.get("effective_selection", None),
+            "effective_selection_norm": cov_aux.get("effective_selection_norm", None),
+            "effective_mass": cov_aux.get("effective_mass", None),
+
+            "expected_effective_selection": cov_aux.get("expected_effective_selection", None),
+            "expected_effective_mass": cov_aux.get("expected_effective_mass", None),
+
             "l0_penalty": cov_aux["l0_penalty"],
             "cross_attn_maps": cross_attn_maps,
         }
         return out
 
     def get_auxiliary_losses(self) -> Dict[str, torch.Tensor]:
-        # Not used by Baseclass_forecast automatically, but available if you want it.
         if "l0_penalty" in self.latest_aux:
             return {"l0_penalty": self.latest_aux["l0_penalty"]}
         return {"l0_penalty": torch.tensor(0.0, device=next(self.parameters()).device)}
@@ -820,8 +898,8 @@ class SparseNHITSiTransformer_forecast(Baseclass_forecast):
         # model-specific
         target_hidden_size,
         target_pooled_sizes,
-        target_n_knots,
         target_n_mlp_layers,
+        target_pooling_mode,
         cov_n_layers,
         cov_n_heads,
         cov_d_ff,
@@ -888,8 +966,8 @@ class SparseNHITSiTransformer_forecast(Baseclass_forecast):
             tail_model=tail_model,
             target_hidden_size=target_hidden_size,
             target_pooled_sizes=target_pooled_sizes,
-            target_n_knots=target_n_knots,
             target_n_mlp_layers=target_n_mlp_layers,
+            target_pooling_mode=target_pooling_mode,
             cov_n_layers=cov_n_layers,
             cov_n_heads=cov_n_heads,
             cov_d_ff=cov_d_ff,
@@ -908,17 +986,17 @@ class SparseNHITSiTransformer_forecast(Baseclass_forecast):
         model_parser = parent_parser.add_argument_group('Model-specific arguments')
 
         # Core
-        model_parser.add_argument('--d_model', type=int, default=128)
+        model_parser.add_argument('--d_model', type=int, default=512)
         model_parser.add_argument('--dropout', type=float, default=0.1)
         model_parser.add_argument('--revin_type', type=str, choices=['revin', 'robust'], default='revin')
         model_parser.add_argument('--affine', type=int, choices=[0, 1], default=1)
 
         # Target / NHITS
-        model_parser.add_argument('--target_hidden_size', type=int, default=256)
-        model_parser.add_argument('--target_pooled_sizes', type=int, nargs='+', default=[8, 16, 32])
-        model_parser.add_argument('--target_n_knots', type=int, default=8)
-        model_parser.add_argument('--target_n_mlp_layers', type=int, default=2)
-
+        model_parser.add_argument('--target_hidden_size', type=int, default=512)
+        model_parser.add_argument('--target_pooled_sizes', type=int, nargs='+', default=[8,4,2,1])
+        model_parser.add_argument('--target_n_mlp_layers', type=int, default=3)
+        model_parser.add_argument('--target_pooling_mode', type=str, choices=['MaxPool1d', 'AvgPool1d'], default='MaxPool1d')
+        
         # Covariate encoder
         model_parser.add_argument('--cov_n_layers', type=int, default=2)
         model_parser.add_argument('--cov_n_heads', type=int, default=4)

@@ -1,12 +1,12 @@
-for alpha in 0.5 0.3 1.0 
+for alpha in 0.1 
 do
-for task in distribution
+for task in gaussian
 do
-for model in TSMixer
+for model in TimeXer
 do
 for loss in twcrps
 do
-for tail in none gpd
+for tail in gpd
 do
 for decomp in spline
 do
@@ -22,7 +22,7 @@ python main_lightning.py \
     --forecast_task $task \
     --model_name $model \
     --method forecast \
-    --experiment_name stablecoin-models \
+    --experiment_name stablecoin-paper \
     --run_name "${model}_alpha_${alpha}_${task}_${loss}_${decomp}_${revin}_${grid}_${tail}" \
     --n_epochs 100 \
     --patience 5 \
@@ -43,15 +43,19 @@ python main_lightning.py \
     --u_grid_size 256 \
     --grid_density $grid \
     --quantile_decomp $decomp \
-    --knot_kind uniform \
+    --knot_kind $grid \
     --knot_p $knot_p \
     --spline_degree 3 \
     --tail_model $tail \
-    --gpd_u_low 0.02 \
-    --gpd_u_high 0.98 \
-    --gpd_xi_min -0.25 \
-    --gpd_xi_max 0.5 \
+    --gpd_u_low 0.005 \
+    --gpd_u_high 0.995 \
+    --gpd_xi_min 0 \
+    --gpd_xi_max 0.75 \
     --remote_logging \
+    --selector_activation softmax \
+    --use_hard_concrete 1 \
+    --l0_lambda 1e-6 \
+    --save_test_diagnostics 1 \
 
 done
 done

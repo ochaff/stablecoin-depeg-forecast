@@ -11,8 +11,11 @@ class TemporalMixing(nn.Module):
 
     def __init__(self, n_series, input_size, dropout):
         super().__init__()
-        self.temporal_norm = nn.BatchNorm1d(
-            num_features=n_series * input_size, eps=0.001, momentum=0.01
+        # self.temporal_norm = nn.BatchNorm1d(
+        #     num_features=n_series * input_size, eps=0.001, momentum=0.01
+        # )
+        self.temporal_norm = nn.LayerNorm(
+            normalized_shape=n_series * input_size, eps=0.001, elementwise_affine=False
         )
         self.temporal_lin = nn.Linear(input_size, input_size)
         self.temporal_drop = nn.Dropout(dropout)

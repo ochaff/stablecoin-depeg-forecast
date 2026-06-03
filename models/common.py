@@ -22,11 +22,14 @@ from models.utils import (
     plot_tail_exceedance_calibration, plot_tail_exceedance_ratio,
     plot_pit_hist_from_values, plot_pit_ecdf_from_values, compute_spliced_pit_batched,
     plot_es_diagnostics, plot_var_es_timeline, compute_spliced_var_es_batched, build_spliced_tail_plot_grid, plot_tail_cdf_survival,
-    plot_cross_attention_sample, plot_cross_attention_over_test, plot_gate_open_rate_bar, plot_topk_variable_traces_over_test, plot_variable_heatmap_over_test
+    plot_cross_attention_sample, plot_cross_attention_over_test, plot_gate_open_rate_bar, plot_topk_variable_traces_over_test, plot_variable_heatmap_over_test,
+    pinball_loss_np, quantiles_from_u_grid,cdf_at_value_from_quantile_grid, expected_shortfall_from_quantile_grid,event_probability_metrics,
+    es_diagnostics_summary, gaussian_var_es, plot_pit_diagnostics_for_horizons, plot_tail_exceedance_diagnostics_for_horizons,
+    plot_gate_open_fraction_bar, plot_scalar_trace_and_hist
     )
 from models.helper_classes import RevIN, ChebyshevQuantile, ISplineQuantile, SplicedGPDQuantile, ShapProbWrapper
-from models.losses import GaussianCRPS, GaussianTWCRPS, CRPSFromQuantiles, ThresholdWeightedCRPSFromQuantiles, BinaryFocalLoss, ChainingFunction
-
+from models.losses import GaussianCRPS, GaussianTWCRPS, CRPSFromQuantiles, ThresholdWeightedCRPSFromQuantiles, BinaryFocalLoss, ScaledThresholdWeightedCRPSFromQuantiles
+from scipy.stats import norm
 
 class Baseclass_forecast(L.LightningModule):
     def __init__(self,
@@ -70,6 +73,13 @@ class Baseclass_forecast(L.LightningModule):
             twcrps_threshold_high = bps_to_logprice(twcrps_threshold_high)
             twcrps_smooth_h = bps_to_logprice(twcrps_smooth_h)
 
+        # absolute event threshold for binary-event diagnostics: |y| >= 15 bps
+        self.event_abs_dev_bps = 15.0
+        if use_log_price:
+            self.event_abs_dev_threshold = float(bps_to_logprice(self.event_abs_dev_bps))
+        else:
+            self.event_abs_dev_threshold = float(self.event_abs_dev_bps)
+
         if self.forecast_task == 'distribution':
             if self.grid_density == 'chebyshev':
                 u = chebyshev_lobatto_u(u_grid_size)
@@ -108,7 +118,7 @@ class Baseclass_forecast(L.LightningModule):
 
             if dist_loss == 'crps':
                 self.criterion = CRPSFromQuantiles(self.quantile.u, self.quantile.wu)
-            else:
+            elif dist_loss == 'twcrps':
                 self.criterion = ThresholdWeightedCRPSFromQuantiles(
                     u=self.quantile.u, wu=self.quantile.wu,
                     threshold_low=twcrps_threshold_low,
@@ -116,6 +126,17 @@ class Baseclass_forecast(L.LightningModule):
                     side=twcrps_side,
                     smooth_h=twcrps_smooth_h
                 )
+            elif dist_loss == 'stwcrps':   
+                self.criterion = ScaledThresholdWeightedCRPSFromQuantiles(
+                    u=self.quantile.u, wu=self.quantile.wu,
+                    threshold_low=twcrps_threshold_low,
+                    threshold_high=twcrps_threshold_high,
+                    side=twcrps_side,
+                    smooth_h=twcrps_smooth_h
+                )
+            else:
+                raise ValueError(f"Unknown dist_loss: {dist_loss}")
+               
         elif self.forecast_task == "gaussian":
             if self.grid_density == 'chebyshev':
                 u = chebyshev_lobatto_u(u_grid_size)
@@ -143,6 +164,27 @@ class Baseclass_forecast(L.LightningModule):
             self.criterion= self.get_criterion(forecast_task, dist_side, tau_pinball)
         self.method = method
         self.save_hyperparameters()
+    def _mlflow_log_scalar(self, key: str, value):
+        try:
+            value = float(value)
+        except Exception:
+            return
+        if not np.isfinite(value):
+            return
+
+        if hasattr(self, "logger") and self.logger is not None:
+            try:
+                self.logger.experiment.log_metric(self.logger.run_id, key, value)
+            except Exception:
+                pass
+
+    def _mlflow_log_dict(self, metrics: dict, prefix: str = ""):
+        for k, v in metrics.items():
+            name = f"{prefix}_{k}" if prefix else str(k)
+            if isinstance(v, dict):
+                self._mlflow_log_dict(v, prefix=name)
+            else:
+                self._mlflow_log_scalar(name, v)
 
     def _compute_pred_loss(self, outputs, batch_y):
         if self.forecast_task == 'distribution':
@@ -182,7 +224,18 @@ class Baseclass_forecast(L.LightningModule):
         if aux is None or not isinstance(aux, dict):
             return
 
-        for key in ["selection_weights", "hard_gates", "expected_open"]:
+        variable_diag_keys = [
+            "selection_weights",
+            "hard_gates",
+            "expected_open",
+            "effective_selection",
+            "effective_selection_norm",
+            "effective_mass",
+            "expected_effective_selection",
+            "expected_effective_mass",
+        ]
+
+        for key in variable_diag_keys:
             val = aux.get(key, None)
             if torch.is_tensor(val):
                 self.test_diag_buffers[key].append(val.detach().cpu())
@@ -296,6 +349,14 @@ class Baseclass_forecast(L.LightningModule):
             "selection_weights": [],
             "hard_gates": [],
             "expected_open": [],
+
+            "effective_selection": [],
+            "effective_selection_norm": [],
+            "effective_mass": [],
+
+            "expected_effective_selection": [],
+            "expected_effective_mass": [],
+
             "cross_attn_last": [],
             "cross_attn_mean_layers": [],
         }
@@ -366,6 +427,74 @@ class Baseclass_forecast(L.LightningModule):
 
             A['Q'] = Q_cpu
             A['q'] = q_cpu
+            
+            # =====================================================
+            # Additional numeric diagnostics:
+            # 1) threshold-event probability metrics at |y| >= 15bps
+            # 2) extreme quantile pinball losses at 0.01 / 0.99
+            # =====================================================
+            abs_thr = float(self.event_abs_dev_threshold)
+
+            # ---- extreme quantiles ----
+            if is_spliced_gpd:
+                q_extreme = np.empty((B, H, 2), dtype=np.float32)
+                tau_t = torch.tensor([0.01, 0.99], device=device, dtype=torch.float32)
+
+                with torch.inference_mode():
+                    for b0, b1 in _batched_range(B, bs):
+                        params_t = torch.from_numpy(params_np[b0:b1]).to(device=device, dtype=torch.float32)
+                        q_t = self.quantile.quantile_at_levels(params_t, tau_t)  # (b,H,2)
+                        q_extreme[b0:b1] = q_t.detach().cpu().numpy().astype(np.float32)
+                        del params_t, q_t
+            else:
+                q_extreme = quantiles_from_u_grid(Q_cpu, u_grid, [0.01, 0.99])  # (B,H,2)
+
+            q01 = q_extreme[..., 0]
+            q99 = q_extreme[..., 1]
+
+            pinball_q01 = pinball_loss_np(y_true, q01, 0.01)
+            pinball_q99 = pinball_loss_np(y_true, q99, 0.99)
+
+            A["pinball_extreme"] = {
+                "q01": float(pinball_q01),
+                "q99": float(pinball_q99),
+            }
+
+            self._mlflow_log_scalar("test_pinball_q01", pinball_q01)
+            self._mlflow_log_scalar("test_pinball_q99", pinball_q99)
+
+            # ---- threshold-event probability metrics: P(|Y| >= abs_thr) ----
+            if is_spliced_gpd:
+                p_abs_event = np.empty((B, H), dtype=np.float32)
+
+                with torch.inference_mode():
+                    for b0, b1 in _batched_range(B, bs):
+                        params_t = torch.from_numpy(params_np[b0:b1]).to(device=device, dtype=torch.float32)
+
+                        y_lo_t = torch.full((b1 - b0, H), -abs_thr, device=device, dtype=torch.float32)
+                        y_hi_t = torch.full((b1 - b0, H),  abs_thr, device=device, dtype=torch.float32)
+
+                        F_lo = self.quantile.cdf_at_y(params_t, y_lo_t)  # P(Y <= -thr)
+                        F_hi = self.quantile.cdf_at_y(params_t, y_hi_t)  # P(Y <= +thr)
+
+                        p_abs_event[b0:b1] = (F_lo + (1.0 - F_hi)).detach().cpu().numpy().astype(np.float32)
+
+                        del params_t, y_lo_t, y_hi_t, F_lo, F_hi
+            else:
+                F_lo = cdf_at_value_from_quantile_grid(Q_cpu, u_grid, -abs_thr)
+                F_hi = cdf_at_value_from_quantile_grid(Q_cpu, u_grid,  abs_thr)
+                p_abs_event = F_lo + (1.0 - F_hi)
+
+            event_metrics = event_probability_metrics(
+                p_event=p_abs_event,
+                y_true=y_true,
+                abs_threshold=abs_thr,
+            )
+
+            A["abs15_event_metrics"] = event_metrics
+
+            # log to MLflow
+            self._mlflow_log_dict(event_metrics, prefix="test_abs15_event")
 
             # -------------------------
             # z-grid for CDF/PDF plots
@@ -534,67 +663,69 @@ class Baseclass_forecast(L.LightningModule):
             # PIT / ECDF / tail-calibration diagnostics
             # -------------------------
             if is_spliced_gpd:
-                pit_vals = compute_spliced_pit_batched(
-                    spliced_quantile=self.quantile,
-                    params_np=params_np,
-                    y_true_np=y_true,
-                    horizon=0,
-                    batch_size=bs,
-                    device=device,
-                )
+                for h_ahead in [1, 12, 24]:
+                    h_idx = h_ahead - 1
 
-                pit_vals, pit_stats = plot_pit_hist_from_values(
-                    pits=pit_vals,
-                    bins=20,
-                    title_prefix="Test set (exact tail-aware)",
-                    out_path=os.path.join(plots_dir, "pit_h0.png"),
-                )
+                    if h_idx < 0 or h_idx >= H:
+                        print(f"Skipping spliced PIT h={h_ahead}: H={H} is too small.")
+                        continue
 
-                _, pit_ecdf_stats = plot_pit_ecdf_from_values(
-                    pits=pit_vals,
-                    title_prefix="Test set (exact tail-aware)",
-                    out_path=os.path.join(plots_dir, "pit_ecdf_h0.png"),
-                )
+                    pit_vals = compute_spliced_pit_batched(
+                        spliced_quantile=self.quantile,
+                        params_np=params_np,
+                        y_true_np=y_true,
+                        horizon=h_idx,
+                        batch_size=bs,
+                        device=device,
+                    )
+
+                    pit_vals, pit_stats = plot_pit_hist_from_values(
+                        pits=pit_vals,
+                        bins=20,
+                        title_prefix=f"Test set {h_ahead}h ahead exact tail-aware",
+                        out_path=os.path.join(plots_dir, f"pit_h{h_ahead}.png"),
+                    )
+
+                    _, pit_ecdf_stats = plot_pit_ecdf_from_values(
+                        pits=pit_vals,
+                        title_prefix=f"Test set {h_ahead}h ahead exact tail-aware",
+                        out_path=os.path.join(plots_dir, f"pit_ecdf_h{h_ahead}.png"),
+                    )
+
+                    A[f"pit_h{h_ahead}"] = pit_vals
+                    A[f"pit_stats_h{h_ahead}"] = pit_stats
+                    A[f"pit_ecdf_stats_h{h_ahead}"] = pit_ecdf_stats
+
+                    # Optional backward compatibility
+                    if h_ahead == 1:
+                        A["pit_h0"] = pit_vals
+                        A["pit_stats_h0"] = pit_stats
+                        A["pit_ecdf_stats_h0"] = pit_ecdf_stats
             else:
-                pit_vals, pit_stats = plot_pit_hist(
+                plot_pit_diagnostics_for_horizons(
+                    A=A,
+                    plots_dir=plots_dir,
                     u_grid=u_grid,
-                    Q_all=Q_cpu,
+                    Q_cpu=Q_cpu,
                     y_true=y_true,
-                    horizon=0,
-                    bins=20,
+                    horizons_ahead=(1, 12, 24),
                     title_prefix="Test set",
-                    out_path=os.path.join(plots_dir, "pit_h0.png")
                 )
 
-                _, pit_ecdf_stats = plot_pit_ecdf(
-                    u_grid=u_grid,
-                    Q_all=Q_cpu,
-                    y_true=y_true,
-                    horizon=0,
-                    title_prefix="Test set",
-                    out_path=os.path.join(plots_dir, "pit_ecdf_h0.png"),
-                )
-
-            tail_summary = plot_tail_exceedance_calibration(
+            plot_tail_exceedance_diagnostics_for_horizons(
+                A=A,
+                plots_dir=plots_dir,
                 u_grid=u_grid,
-                Q_all=Q_cpu,
+                Q_cpu=Q_cpu,
                 y_true=y_true,
-                horizon=0,
+                horizons_ahead=(1, 12, 24),
                 alphas=[0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
                 title_prefix="Test set",
-                out_path=os.path.join(plots_dir, "tail_exceedance_h0.png"),
-            )
-
-            plot_tail_exceedance_ratio(
-                summary=tail_summary,
-                title_prefix="Test set",
-                out_path=os.path.join(plots_dir, "tail_exceedance_ratio_h0.png"),
             )
 
             A["pit_h0"] = pit_vals
             A["pit_stats_h0"] = pit_stats
             A["pit_ecdf_stats_h0"] = pit_ecdf_stats
-            A["tail_exceedance_h0"] = tail_summary
             
             # -------------------------
             # Exact VaR / ES diagnostics for spliced GPD tails
@@ -679,6 +810,70 @@ class Baseclass_forecast(L.LightningModule):
                 A["es_upper_h0"] = esU_h0
                 A["es_lower_summary_h0"] = es_lower_summary
                 A["es_upper_summary_h0"] = es_upper_summary
+                
+                # Numerical ES diagnostics (horizon 0)
+                es_lower_metrics = es_diagnostics_summary(
+                    y_true_1d=y_true[:, 0],
+                    var_pred=varL_h0,
+                    es_pred=esL_h0,
+                    alphas=es_alphas,
+                    side="lower",
+                )
+                es_upper_metrics = es_diagnostics_summary(
+                    y_true_1d=y_true[:, 0],
+                    var_pred=varU_h0,
+                    es_pred=esU_h0,
+                    alphas=es_alphas,
+                    side="upper",
+                )
+
+                A["es_lower_metrics_h0"] = es_lower_metrics
+                A["es_upper_metrics_h0"] = es_upper_metrics
+
+                # log to MLflow
+                self._mlflow_log_dict(es_lower_metrics, prefix="test_es_lower_h0")
+                self._mlflow_log_dict(es_upper_metrics, prefix="test_es_upper_h0")
+
+            if not is_spliced_gpd:
+                es_alphas = np.array([0.01, 0.02, 0.05], dtype=np.float32)
+
+                Q_h0 = Q_cpu[:, 0:1, :]  # (B,1,J)
+
+                varL_h0 = quantiles_from_u_grid(Q_h0, u_grid, es_alphas).squeeze(1)              # (B,A)
+                varU_h0 = quantiles_from_u_grid(Q_h0, u_grid, 1.0 - es_alphas).squeeze(1)        # (B,A)
+
+                esL_h0 = expected_shortfall_from_quantile_grid(
+                    Q_h0, u_grid, es_alphas, side="lower"
+                ).squeeze(1)
+                esU_h0 = expected_shortfall_from_quantile_grid(
+                    Q_h0, u_grid, es_alphas, side="upper"
+                ).squeeze(1)
+
+                es_lower_metrics = es_diagnostics_summary(
+                    y_true_1d=y_true[:, 0],
+                    var_pred=varL_h0,
+                    es_pred=esL_h0,
+                    alphas=es_alphas,
+                    side="lower",
+                )
+                es_upper_metrics = es_diagnostics_summary(
+                    y_true_1d=y_true[:, 0],
+                    var_pred=varU_h0,
+                    es_pred=esU_h0,
+                    alphas=es_alphas,
+                    side="upper",
+                )
+
+                A["es_alphas_h0"] = es_alphas
+                A["var_lower_h0"] = varL_h0
+                A["es_lower_h0"] = esL_h0
+                A["var_upper_h0"] = varU_h0
+                A["es_upper_h0"] = esU_h0
+                A["es_lower_metrics_h0"] = es_lower_metrics
+                A["es_upper_metrics_h0"] = es_upper_metrics
+
+                self._mlflow_log_dict(es_lower_metrics, prefix="test_es_lower_h0")
+                self._mlflow_log_dict(es_upper_metrics, prefix="test_es_upper_h0")
 
         elif self.forecast_task == 'gaussian':
             # -------------------------
@@ -769,6 +964,86 @@ class Baseclass_forecast(L.LightningModule):
 
             A['Q'] = Q_cpu
             A['q'] = q_cpu
+            
+            # =====================================================
+            # Additional numeric diagnostics for Gaussian forecasts
+            # =====================================================
+            abs_thr = float(self.event_abs_dev_threshold)
+
+            # ---- threshold-event probability: P(|Y| >= abs_thr) ----
+            sqrt_2 = math.sqrt(2.0)
+
+            z_lo = (-abs_thr - mu_np) / sigma_np
+            z_hi = ( abs_thr - mu_np) / sigma_np
+
+            F_lo = norm.cdf(z_lo)
+            F_hi = norm.cdf(z_hi)
+
+            p_abs_event = F_lo + (1.0 - F_hi)
+            
+            event_metrics = event_probability_metrics(
+                p_event=p_abs_event,
+                y_true=y_true,
+                abs_threshold=abs_thr,
+            )
+
+            A["abs15_event_metrics"] = event_metrics
+            self._mlflow_log_dict(event_metrics, prefix="test_abs15_event")
+
+            # ---- extreme quantile pinball losses ----
+            normal = Normal(loc=torch.tensor(0.0), scale=torch.tensor(1.0))
+            z01 = float(normal.icdf(torch.tensor(0.01)).item())
+            z99 = float(normal.icdf(torch.tensor(0.99)).item())
+
+            q01 = mu_np + sigma_np * z01
+            q99 = mu_np + sigma_np * z99
+
+            pinball_q01 = pinball_loss_np(y_true, q01, 0.01)
+            pinball_q99 = pinball_loss_np(y_true, q99, 0.99)
+
+            A["pinball_extreme"] = {
+                "q01": float(pinball_q01),
+                "q99": float(pinball_q99),
+            }
+
+            self._mlflow_log_scalar("test_pinball_q01", pinball_q01)
+            self._mlflow_log_scalar("test_pinball_q99", pinball_q99)
+
+            # ---- ES diagnostics at h=0 ----
+            es_alphas = np.array([0.01, 0.02, 0.05], dtype=np.float32)
+
+            mu_h0 = mu_np[:, 0]
+            sigma_h0 = sigma_np[:, 0]
+            y_h0 = y_true[:, 0]
+
+            varL_h0, esL_h0 = gaussian_var_es(mu_h0, sigma_h0, es_alphas, side="lower")
+            varU_h0, esU_h0 = gaussian_var_es(mu_h0, sigma_h0, es_alphas, side="upper")
+
+            es_lower_metrics = es_diagnostics_summary(
+                y_true_1d=y_h0,
+                var_pred=varL_h0,
+                es_pred=esL_h0,
+                alphas=es_alphas,
+                side="lower",
+            )
+            es_upper_metrics = es_diagnostics_summary(
+                y_true_1d=y_h0,
+                var_pred=varU_h0,
+                es_pred=esU_h0,
+                alphas=es_alphas,
+                side="upper",
+            )
+
+            A["es_alphas_h0"] = es_alphas
+            A["var_lower_h0"] = varL_h0
+            A["es_lower_h0"] = esL_h0
+            A["var_upper_h0"] = varU_h0
+            A["es_upper_h0"] = esU_h0
+            A["es_lower_metrics_h0"] = es_lower_metrics
+            A["es_upper_metrics_h0"] = es_upper_metrics
+
+            self._mlflow_log_dict(es_lower_metrics, prefix="test_es_lower_h0")
+            self._mlflow_log_dict(es_upper_metrics, prefix="test_es_upper_h0")
 
             # -------------------------
             # z-grid for CDF/PDF plots
@@ -831,98 +1106,219 @@ class Baseclass_forecast(L.LightningModule):
                     out_path=os.path.join(plots_dir, f"s{i}_fan.png")
                 )
 
-            pit_vals, pit_stats = plot_pit_hist(
+            plot_pit_diagnostics_for_horizons(
+                A=A,
+                plots_dir=plots_dir,
                 u_grid=u_grid,
-                Q_all=Q_cpu,
+                Q_cpu=Q_cpu,
                 y_true=y_true,
-                horizon=0,
-                bins=20,
+                horizons_ahead=(1, 12, 24),
                 title_prefix="Test set",
-                out_path=os.path.join(plots_dir, "pit_h0.png")
             )
-            pit_vals, pit_ecdf_stats = plot_pit_ecdf(
+            plot_tail_exceedance_diagnostics_for_horizons(
+                A=A,
+                plots_dir=plots_dir,
                 u_grid=u_grid,
-                Q_all=Q_cpu,
+                Q_cpu=Q_cpu,
                 y_true=y_true,
-                horizon=0,
-                title_prefix="Test set",
-                out_path=os.path.join(plots_dir, "pit_ecdf_h0.png"),
-            )
-
-            tail_summary = plot_tail_exceedance_calibration(
-                u_grid=u_grid,
-                Q_all=Q_cpu,
-                y_true=y_true,
-                horizon=0,
+                horizons_ahead=(1, 12, 24),
                 alphas=[0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
                 title_prefix="Test set",
-                out_path=os.path.join(plots_dir, "tail_exceedance_h0.png"),
             )
-
-            plot_tail_exceedance_ratio(
-                summary=tail_summary,
-                title_prefix="Test set",
-                out_path=os.path.join(plots_dir, "tail_exceedance_ratio_h0.png"),
-            )
-
-            A["pit_ecdf_stats_h0"] = pit_ecdf_stats
-            A["tail_exceedance_h0"] = tail_summary
-            A["pit_h0"] = pit_vals
-            A["pit_stats_h0"] = pit_stats
+           
 
         if self.save_test_diagnostics:
             diagnostics = self._finalize_test_diagnostics()
             A["diagnostics"] = diagnostics
             diag = A["diagnostics"]
 
-
+            # ---------------------------------------------------------
+            # 1. Raw selector weights
+            # ---------------------------------------------------------
             if "selection_weights" in diag:
                 plot_variable_heatmap_over_test(
                     diag["selection_weights"],
                     out_path=os.path.join(plots_dir, "selection_weights_heatmap.png"),
                     var_names=var_names,
-                    title="Selection weights over test windows",
+                    title="Raw selector weights before hard gates",
                     top_k=self.diag_top_k_vars,
                     max_rows=self.diag_max_plot_samples,
                 )
+
                 plot_topk_variable_traces_over_test(
                     diag["selection_weights"],
                     out_path=os.path.join(plots_dir, "selection_weights_traces.png"),
                     var_names=var_names,
-                    title="Top selection weights over test windows",
+                    title="Top raw selector weights over test windows",
                     top_k=min(8, self.diag_top_k_vars),
                     smooth=11,
                 )
 
+            # ---------------------------------------------------------
+            # 2. Hard gates
+            # ---------------------------------------------------------
             if "hard_gates" in diag:
                 plot_variable_heatmap_over_test(
                     diag["hard_gates"],
                     out_path=os.path.join(plots_dir, "hard_gates_heatmap.png"),
                     var_names=var_names,
-                    title="Hard gates over test windows",
+                    title="Hard-concrete gate values over test windows",
                     top_k=self.diag_top_k_vars,
                     max_rows=self.diag_max_plot_samples,
                 )
+
+                # Mean gate value
                 plot_gate_open_rate_bar(
                     diag["hard_gates"],
-                    out_path=os.path.join(plots_dir, "hard_gates_open_rate.png"),
+                    out_path=os.path.join(plots_dir, "hard_gates_mean_value.png"),
                     var_names=var_names,
-                    title="Mean hard-gate openness",
+                    title="Mean hard-gate value by variable",
                     top_k=self.diag_top_k_vars,
                 )
 
+                # True open fraction
+                plot_gate_open_fraction_bar(
+                    diag["hard_gates"],
+                    out_path=os.path.join(plots_dir, "hard_gates_open_fraction.png"),
+                    var_names=var_names,
+                    title="Hard-gate open fraction by variable",
+                    top_k=self.diag_top_k_vars,
+                    threshold=1e-6,
+                )
+
+            # ---------------------------------------------------------
+            # 3. Expected open probability
+            # ---------------------------------------------------------
+            if "expected_open" in diag:
+                plot_variable_heatmap_over_test(
+                    diag["expected_open"],
+                    out_path=os.path.join(plots_dir, "expected_open_heatmap.png"),
+                    var_names=var_names,
+                    title="Hard-concrete expected open probability",
+                    top_k=self.diag_top_k_vars,
+                    max_rows=self.diag_max_plot_samples,
+                )
+
+                plot_gate_open_rate_bar(
+                    diag["expected_open"],
+                    out_path=os.path.join(plots_dir, "expected_open_mean.png"),
+                    var_names=var_names,
+                    title="Mean expected open probability by variable",
+                    top_k=self.diag_top_k_vars,
+                )
+
+                plot_topk_variable_traces_over_test(
+                    diag["expected_open"],
+                    out_path=os.path.join(plots_dir, "expected_open_traces.png"),
+                    var_names=var_names,
+                    title="Top expected open probabilities over test windows",
+                    top_k=min(8, self.diag_top_k_vars),
+                    smooth=11,
+                )
+
+            # ---------------------------------------------------------
+            # 4. Raw effective selection = selector weight * hard gate
+            # ---------------------------------------------------------
+            if "effective_selection" in diag:
+                plot_variable_heatmap_over_test(
+                    diag["effective_selection"],
+                    out_path=os.path.join(plots_dir, "effective_selection_heatmap.png"),
+                    var_names=var_names,
+                    title="Raw effective selection = selector weight × hard gate",
+                    top_k=self.diag_top_k_vars,
+                    max_rows=self.diag_max_plot_samples,
+                )
+
+                plot_topk_variable_traces_over_test(
+                    diag["effective_selection"],
+                    out_path=os.path.join(plots_dir, "effective_selection_traces.png"),
+                    var_names=var_names,
+                    title="Top raw effective selections over test windows",
+                    top_k=min(8, self.diag_top_k_vars),
+                    smooth=11,
+                )
+
+            # ---------------------------------------------------------
+            # 5. Normalized effective selection
+            #    This is now the actual weight applied to covariate tokens.
+            # ---------------------------------------------------------
+            if "effective_selection_norm" in diag:
+                plot_variable_heatmap_over_test(
+                    diag["effective_selection_norm"],
+                    out_path=os.path.join(plots_dir, "effective_selection_norm_heatmap.png"),
+                    var_names=var_names,
+                    title="Normalized effective selection actually applied to tokens",
+                    top_k=self.diag_top_k_vars,
+                    max_rows=self.diag_max_plot_samples,
+                )
+
+                plot_topk_variable_traces_over_test(
+                    diag["effective_selection_norm"],
+                    out_path=os.path.join(plots_dir, "effective_selection_norm_traces.png"),
+                    var_names=var_names,
+                    title="Top normalized effective selections over test windows",
+                    top_k=min(8, self.diag_top_k_vars),
+                    smooth=11,
+                )
+
+            # ---------------------------------------------------------
+            # 6. Expected effective selection
+            # ---------------------------------------------------------
+            if "expected_effective_selection" in diag:
+                plot_variable_heatmap_over_test(
+                    diag["expected_effective_selection"],
+                    out_path=os.path.join(plots_dir, "expected_effective_selection_heatmap.png"),
+                    var_names=var_names,
+                    title="Expected effective selection = selector weight × expected open",
+                    top_k=self.diag_top_k_vars,
+                    max_rows=self.diag_max_plot_samples,
+                )
+
+                plot_topk_variable_traces_over_test(
+                    diag["expected_effective_selection"],
+                    out_path=os.path.join(plots_dir, "expected_effective_selection_traces.png"),
+                    var_names=var_names,
+                    title="Top expected effective selections over test windows",
+                    top_k=min(8, self.diag_top_k_vars),
+                    smooth=11,
+                )
+
+            # ---------------------------------------------------------
+            # 7. Effective mass before renormalization
+            # ---------------------------------------------------------
+            if "effective_mass" in diag:
+                plot_scalar_trace_and_hist(
+                    diag["effective_mass"],
+                    out_path_prefix=os.path.join(plots_dir, "effective_mass"),
+                    title="Effective mass before renormalization",
+                    ylabel="sum_v(selection_weight_v × hard_gate_v)",
+                    max_points=self.diag_max_plot_samples,
+                )
+
+            if "expected_effective_mass" in diag:
+                plot_scalar_trace_and_hist(
+                    diag["expected_effective_mass"],
+                    out_path_prefix=os.path.join(plots_dir, "expected_effective_mass"),
+                    title="Expected effective mass before renormalization",
+                    ylabel="sum_v(selection_weight_v × expected_open_v)",
+                    max_points=self.diag_max_plot_samples,
+                )
+
+            # ---------------------------------------------------------
+            # 8. Raw cross-attention
+            # ---------------------------------------------------------
             if "cross_attn_mean_layers" in diag:
                 plot_cross_attention_over_test(
                     diag["cross_attn_mean_layers"],
                     out_path=os.path.join(plots_dir, "cross_attention_over_test_meanH.png"),
                     var_names=var_names,
-                    title="Cross-attention over test windows",
+                    title="Raw cross-attention over test windows",
                     horizon_reduce="mean",
                     top_k=self.diag_top_k_vars,
                     max_rows=self.diag_max_plot_samples,
                 )
 
-                # representative sample: highest |target| event
+                # Representative sample: highest |target| event
                 y_true_np = np.array(self.y_test)
                 sample_idx = int(np.argmax(np.max(np.abs(y_true_np), axis=1))) if y_true_np.ndim == 2 else 0
 
@@ -930,10 +1326,70 @@ class Baseclass_forecast(L.LightningModule):
                     diag["cross_attn_mean_layers"][sample_idx],
                     out_path=os.path.join(plots_dir, f"cross_attention_sample_{sample_idx}.png"),
                     var_names=var_names,
-                    title=f"Cross-attention sample {sample_idx}",
+                    title=f"Raw cross-attention sample {sample_idx}",
                     top_k=self.diag_top_k_vars,
                 )
 
+            # ---------------------------------------------------------
+            # 9. Selected cross-attention:
+            #    raw cross-attention multiplied by effective_selection_norm.
+            # ---------------------------------------------------------
+            if (
+                "cross_attn_mean_layers" in diag
+                and "effective_selection_norm" in diag
+            ):
+                cross = diag["cross_attn_mean_layers"]          # [N,H,V]
+                eff = diag["effective_selection_norm"]          # [N,V]
+
+                if cross.ndim == 3 and eff.ndim == 2 and cross.shape[0] == eff.shape[0] and cross.shape[2] == eff.shape[1]:
+                    selected_cross = cross * eff[:, None, :]    # [N,H,V]
+
+                    # Optional normalized version over variables.
+                    selected_cross_norm = selected_cross / (
+                        np.sum(selected_cross, axis=-1, keepdims=True) + 1e-12
+                    )
+
+                    A["diagnostics"]["selected_cross_attn"] = selected_cross
+                    A["diagnostics"]["selected_cross_attn_norm"] = selected_cross_norm
+
+                    plot_cross_attention_over_test(
+                        selected_cross,
+                        out_path=os.path.join(plots_dir, "selected_cross_attention_over_test_meanH.png"),
+                        var_names=var_names,
+                        title="Selected cross-attention = cross-attention × effective selection",
+                        horizon_reduce="mean",
+                        top_k=self.diag_top_k_vars,
+                        max_rows=self.diag_max_plot_samples,
+                    )
+
+                    plot_cross_attention_over_test(
+                        selected_cross_norm,
+                        out_path=os.path.join(plots_dir, "selected_cross_attention_norm_over_test_meanH.png"),
+                        var_names=var_names,
+                        title="Normalized selected cross-attention",
+                        horizon_reduce="mean",
+                        top_k=self.diag_top_k_vars,
+                        max_rows=self.diag_max_plot_samples,
+                    )
+
+                    y_true_np = np.array(self.y_test)
+                    sample_idx = int(np.argmax(np.max(np.abs(y_true_np), axis=1))) if y_true_np.ndim == 2 else 0
+
+                    plot_cross_attention_sample(
+                        selected_cross[sample_idx],
+                        out_path=os.path.join(plots_dir, f"selected_cross_attention_sample_{sample_idx}.png"),
+                        var_names=var_names,
+                        title=f"Selected cross-attention sample {sample_idx}",
+                        top_k=self.diag_top_k_vars,
+                    )
+
+                    plot_cross_attention_sample(
+                        selected_cross_norm[sample_idx],
+                        out_path=os.path.join(plots_dir, f"selected_cross_attention_norm_sample_{sample_idx}.png"),
+                        var_names=var_names,
+                        title=f"Normalized selected cross-attention sample {sample_idx}",
+                        top_k=self.diag_top_k_vars,
+                    )
         # ---- save pickle ----
         out_path = os.path.join(run_dir, "preds_test_set.pkl")
         with open(out_path, 'wb') as f:
@@ -975,7 +1431,7 @@ class Baseclass_forecast(L.LightningModule):
         class_parser.add_argument('--dist_side', type=str, default='both', choices=['both', 'up', 'down'], help='side of the distribution to be predicted (for quantile/expectile forecasting)')
 
         loss_parser = parent_parser.add_argument_group('Training loss arguments')
-        loss_parser.add_argument('--dist_loss', type=str, default='twcrps', choices=['crps','twcrps'], help='which distributional loss to use for distribution forecasting')
+        loss_parser.add_argument('--dist_loss', type=str, default='twcrps', choices=['crps','twcrps', 'stwcrps'], help='which distributional loss to use for distribution forecasting')
         loss_parser.add_argument('--twcrps_threshold_low', type=float, default=-10.0, help='lower threshold for twCRPS loss (for price target), in depeg bps (conversion to log is done internally)')
         loss_parser.add_argument('--twcrps_threshold_high', type=float, default=10.0, help='upper threshold for twCRPS loss (for price target), in depeg bps (conversion to log is done internally)')
         loss_parser.add_argument('--twcrps_side', type=str, default='two_sided', choices=['below','above', 'two_sided'], help='side of the distribution to consider for twCRPS loss')
@@ -987,8 +1443,8 @@ class Baseclass_forecast(L.LightningModule):
         distribution_parser.add_argument('--grid_density', type=str, default='uniform', choices=['chebyshev', 'uniform', 'logit', 'power-tail'], help='type of grid for distribution forecasting')
         distribution_parser.add_argument('--quantile_decomp', type=str, default='chebyshev', choices=['chebyshev', 'spline'], help='type of quantile decomposition for distribution forecasting')
         distribution_parser.add_argument('--spline_degree', type=int, default=3, help='degree of I-spline basis (if quantile_decomp is spline)')
-        distribution_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power_tails', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)')
-        distribution_parser.add_argument('--knot_p', type=float, default=3.0, help='power parameter for power-tail knot placement (if quantile_decomp is spline and knot_kind is power_tails)')
+        distribution_parser.add_argument('--knot_kind', type=str, default='uniform', choices = ['power-tail', 'uniform'], help='kind of knot placement for I-splines (if quantile_decomp is spline)')
+        distribution_parser.add_argument('--knot_p', type=float, default=3.0, help='power parameter for power-tail knot placement (if quantile_decomp is spline and knot_kind is power-tail)')
         distribution_parser.add_argument('--n_cheb', type=int, default=2, help='number of Chebyshev polynomials for distribution forecasting')
         
         tail_parser = parent_parser.add_argument_group('Spliced tail model arguments (for distribution forecasting)')
@@ -1001,7 +1457,7 @@ class Baseclass_forecast(L.LightningModule):
         diag_parser = parent_parser.add_argument_group('Model regularization / diagnostics')
         diag_parser.add_argument('--l0_lambda', type=float, default=0.0,
                                 help='weight for hard-concrete L0 penalty')
-        diag_parser.add_argument('--save_test_diagnostics', type=int, choices=[0,1], default=0,
+        diag_parser.add_argument('--save_test_diagnostics', type=int, choices=[0,1], default=1,
                                 help='whether to save model diagnostics on test set')
         diag_parser.add_argument('--diag_top_k_vars', type=int, default=20,
                                 help='top-k variables to show in diagnostic plots')

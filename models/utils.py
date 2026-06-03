@@ -5,6 +5,8 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import kstest, cramervonmises
+import math
+from torch.distributions import Normal
 
 def bps_to_logprice(x_bps):
     return np.log1p(x_bps / 10000.0)
@@ -41,7 +43,7 @@ def make_open_nonuniform_knots(n_basis: int, degree: int, a=0.0, b=1.0, kind="po
 
     if kind == "uniform":
         internal = torch.linspace(a, b, n_internal + 2, dtype=torch.float64, device=device)[1:-1]
-    elif kind == "power_tails":
+    elif kind == "power-tail":
         # p>1 => denser near 0 and 1
         t = torch.linspace(0.0, 1.0, n_internal + 2, dtype=torch.float64, device=device)[1:-1]
         u = 0.5 + 0.5 * torch.sign(t - 0.5) * torch.abs(2 * t - 1) ** float(p)
@@ -54,6 +56,58 @@ def make_open_nonuniform_knots(n_basis: int, degree: int, a=0.0, b=1.0, kind="po
     # ensure strict increase (numerical safety)
     internal, _ = torch.sort(torch.unique(internal))
     return make_open_knots_from_internal(internal, degree=degree, a=a, b=b)
+
+def plot_scalar_trace_and_hist(
+    values: np.ndarray,
+    out_path_prefix: str,
+    title: str = "Scalar diagnostic",
+    ylabel: str = "value",
+    max_points: int = 5000,
+):
+    """
+    values: (N,) or (N,1)
+    Saves:
+      out_path_prefix + "_trace.png"
+      out_path_prefix + "_hist.png"
+    """
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    values = values[np.isfinite(values)]
+
+    if values.size == 0:
+        return
+
+    # Downsample trace if needed.
+    if values.size > max_points:
+        idx = np.linspace(0, values.size - 1, max_points).astype(int)
+        trace_vals = values[idx]
+        x = idx
+    else:
+        trace_vals = values
+        x = np.arange(values.size)
+
+    # Trace plot
+    fig, ax = plt.subplots(figsize=(12, 4), dpi=150)
+    ax.plot(x, trace_vals, lw=1.2)
+    ax.set_title(f"{title} trace")
+    ax.set_xlabel("Test window index")
+    ax.set_ylabel(ylabel)
+    fig.tight_layout()
+    fig.savefig(out_path_prefix + "_trace.png", transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+    # Histogram
+    fig, ax = plt.subplots(figsize=(7, 4), dpi=150)
+    ax.hist(values, bins=50, alpha=0.75, edgecolor="black")
+    ax.set_title(
+        f"{title} histogram\n"
+        f"mean={np.mean(values):.4g}, median={np.median(values):.4g}, "
+        f"min={np.min(values):.4g}, max={np.max(values):.4g}"
+    )
+    ax.set_xlabel(ylabel)
+    ax.set_ylabel("count")
+    fig.tight_layout()
+    fig.savefig(out_path_prefix + "_hist.png", transparent=True, bbox_inches="tight")
+    plt.close(fig)
 
 
 def bspline_basis(u: torch.Tensor, knots: torch.Tensor, degree: int):
@@ -165,7 +219,7 @@ def logit_u(J: int, eps: float = 1e-6, device=None, dtype=torch.float32):
     u = torch.sigmoid(t)
     return u
 
-def power_tails_u(J: int, p: float = 1/3, eps: float = 1e-6, device=None, dtype=torch.float32):
+def power_tails_u(J: int, p: float = 1/3, eps: float = 1e-12, device=None, dtype=torch.float32):
     # start from uniform in (0,1), then warp toward tails
     u0 = (torch.arange(J, device=device, dtype=dtype) + 0.5) / J  # (0,1)
     # symmetric power warp around 0.5
@@ -333,7 +387,7 @@ def plot_fan_chart(u_grid, Q_i_allH, y_true_i_allH,
     plt.xlabel("horizon step")
     plt.ylabel("depeg bps")
     plt.title(f"{title_prefix} Fan chart over horizon")
-    plt.legend(ncols =2, bbox_to_anchor=(0.66, -0.12), frameon = False)
+    plt.legend(ncols = 4, bbox_to_anchor=(0.66, -0.12), frameon = False)
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, transparent=True, bbox_inches="tight")
     plt.close()
@@ -1264,7 +1318,7 @@ def plot_variable_heatmap_over_test(
     ax.set_yticklabels(ylabels)
     fig.colorbar(im, ax=ax)
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, dpi=200, transparent=True, bbox_inches="tight")
     plt.close(fig)
 
 def plot_topk_variable_traces_over_test(
@@ -1302,7 +1356,45 @@ def plot_topk_variable_traces_over_test(
     ax.set_ylabel("Value")
     ax.legend(loc="upper right", ncol=2, fontsize=8)
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, dpi=200, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+
+def plot_gate_open_fraction_bar(
+    hard_gates: np.ndarray,
+    out_path: str,
+    var_names=None,
+    title: str = "Hard-gate open fraction by variable",
+    top_k: int = 20,
+    threshold: float = 1e-6,
+):
+    """
+    hard_gates: (N_test, V)
+
+    Plots fraction of test windows where gate > threshold.
+    """
+    hard_gates = np.asarray(hard_gates, dtype=np.float64)
+    assert hard_gates.ndim == 2, f"Expected (N,V), got {hard_gates.shape}"
+
+    open_fraction = np.nanmean(hard_gates > threshold, axis=0)
+
+    top_k = min(top_k, hard_gates.shape[1])
+    var_idx = np.argsort(-open_fraction)[:top_k]
+
+    labels = [
+        str(var_names[i]) if var_names is not None else f"v{i}"
+        for i in var_idx
+    ]
+    vals = open_fraction[var_idx]
+
+    fig, ax = plt.subplots(figsize=(12, 4), dpi=150)
+    ax.bar(np.arange(top_k), vals)
+    ax.set_title(title)
+    ax.set_ylabel(f"Fraction gate > {threshold:g}")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xticks(np.arange(top_k))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    fig.tight_layout()
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
     plt.close(fig)
 
 def plot_gate_open_rate_bar(
@@ -1332,7 +1424,7 @@ def plot_gate_open_rate_bar(
     ax.set_xticks(np.arange(top_k))
     ax.set_xticklabels(labels, rotation=45, ha="right")
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, dpi = 200, transparent=True, bbox_inches="tight")
     plt.close(fig)
 
 def plot_cross_attention_sample(
@@ -1365,7 +1457,7 @@ def plot_cross_attention_sample(
     ax.set_yticklabels(labels)
     fig.colorbar(im, ax=ax)
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, dpi=200, transparent=True, bbox_inches="tight")
     plt.close(fig)
 
 def plot_cross_attention_over_test(
@@ -1401,6 +1493,409 @@ def plot_cross_attention_over_test(
         max_rows=max_rows,
     )
 
+
+
+
+# ============================================================
+# Numeric metric helpers
+# ============================================================
+
+def pinball_loss_np(y_true: np.ndarray, q_pred: np.ndarray, tau: float) -> float:
+    """
+    Mean pinball loss for arbitrary shape arrays.
+    y_true, q_pred: broadcastable arrays
+    """
+    y_true = np.asarray(y_true, dtype=np.float64)
+    q_pred = np.asarray(q_pred, dtype=np.float64)
+    err = y_true - q_pred
+    loss = np.maximum(tau * err, (tau - 1.0) * err)
+    return float(np.mean(loss))
+
+
+def quantiles_from_u_grid(Q_all: np.ndarray, u_grid: np.ndarray, levels) -> np.ndarray:
+    """
+    Interpolate predicted quantiles from a quantile grid.
+
+    Q_all: (B,H,J)
+    u_grid: (J,)
+    levels: iterable of probability levels
+
+    returns:
+      (B,H,A)
+    """
+    Q_all = np.asarray(Q_all, dtype=np.float64)
+    u_grid = np.asarray(u_grid, dtype=np.float64)
+    levels = np.asarray(levels, dtype=np.float64).reshape(-1)
+
+    B, H, J = Q_all.shape
+    out = np.empty((B, H, len(levels)), dtype=np.float32)
+
+    for k, tau in enumerate(levels):
+        idx = int(np.searchsorted(u_grid, tau, side="left"))
+        if idx <= 0:
+            out[..., k] = Q_all[..., 0]
+        elif idx >= J:
+            out[..., k] = Q_all[..., -1]
+        else:
+            ul = u_grid[idx - 1]
+            ur = u_grid[idx]
+            w = (tau - ul) / max(ur - ul, 1e-12)
+            out[..., k] = ((1.0 - w) * Q_all[..., idx - 1] + w * Q_all[..., idx]).astype(np.float32)
+
+    return out
+
+
+def cdf_at_value_from_quantile_grid(Q_all: np.ndarray, u_grid: np.ndarray, y_val: float, eps: float = 1e-12) -> np.ndarray:
+    """
+    Numerically invert monotone quantile grid Q(u) to approximate F(y_val).
+
+    Q_all: (B,H,J)
+    u_grid: (J,)
+    y_val: scalar
+
+    returns:
+      F_y: (B,H)
+    """
+    Q_all = np.asarray(Q_all, dtype=np.float64)
+    u_grid = np.asarray(u_grid, dtype=np.float64)
+
+    B, H, J = Q_all.shape
+    Qf = Q_all.reshape(-1, J)
+    # enforce monotonicity numerically
+    Qf = np.maximum.accumulate(Qf, axis=1)
+
+    out = np.empty(Qf.shape[0], dtype=np.float64)
+
+    for i, row in enumerate(Qf):
+        idx = int(np.searchsorted(row, y_val, side="left"))
+        if idx <= 0:
+            out[i] = u_grid[0]
+        elif idx >= J:
+            out[i] = u_grid[-1]
+        else:
+            ql = row[idx - 1]
+            qr = row[idx]
+            if qr <= ql + eps:
+                w = 0.0
+            else:
+                w = (y_val - ql) / (qr - ql)
+            out[i] = u_grid[idx - 1] + w * (u_grid[idx] - u_grid[idx - 1])
+
+    return out.reshape(B, H).astype(np.float32)
+
+
+def expected_shortfall_from_quantile_grid(
+    Q_all: np.ndarray,
+    u_grid: np.ndarray,
+    alphas,
+    side: str = "lower",
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """
+    Approximate ES from quantile grid.
+
+    lower:
+      ES_alpha = (1/alpha) ∫_0^alpha Q(u) du
+
+    upper:
+      ES_alpha = (1/alpha) ∫_{1-alpha}^1 Q(u) du
+
+    Q_all: (B,H,J)
+    u_grid: (J,)
+    alphas: iterable
+
+    returns:
+      ES: (B,H,A)
+    """
+    Q_all = np.asarray(Q_all, dtype=np.float64)
+    u_grid = np.asarray(u_grid, dtype=np.float64)
+    alphas = np.asarray(alphas, dtype=np.float64).reshape(-1)
+
+    B, H, J = Q_all.shape
+    out = np.empty((B, H, len(alphas)), dtype=np.float32)
+
+    for k, a in enumerate(alphas):
+        a = max(float(a), eps)
+
+        if side == "lower":
+            # use grid points up to alpha plus interpolated endpoint at alpha
+            mask = u_grid <= a
+            u_sel = u_grid[mask]
+            Q_sel = Q_all[..., mask]
+
+            if u_sel.size == 0 or u_sel[-1] < a:
+                q_a = quantiles_from_u_grid(Q_all, u_grid, [a])[..., 0:1]
+                u_aug = np.concatenate([u_sel, np.array([a], dtype=np.float64)])
+                Q_aug = np.concatenate([Q_sel, q_a], axis=-1)
+            else:
+                u_aug = u_sel
+                Q_aug = Q_sel
+
+            integ = np.trapz(Q_aug, u_aug, axis=-1)
+            out[..., k] = (integ / a).astype(np.float32)
+
+        elif side == "upper":
+            lo = 1.0 - a
+            mask = u_grid >= lo
+            u_sel = u_grid[mask]
+            Q_sel = Q_all[..., mask]
+
+            if u_sel.size == 0 or u_sel[0] > lo:
+                q_lo = quantiles_from_u_grid(Q_all, u_grid, [lo])[..., 0:1]
+                u_aug = np.concatenate([np.array([lo], dtype=np.float64), u_sel])
+                Q_aug = np.concatenate([q_lo, Q_sel], axis=-1)
+            else:
+                u_aug = u_sel
+                Q_aug = Q_sel
+
+            integ = np.trapz(Q_aug, u_aug, axis=-1)
+            out[..., k] = (integ / a).astype(np.float32)
+
+        else:
+            raise ValueError("side must be 'lower' or 'upper'")
+
+    return out
+
+
+def event_probability_metrics(
+    p_event: np.ndarray,
+    y_true: np.ndarray,
+    abs_threshold: float,
+    eps: float = 1e-12,
+) -> dict:
+    """
+    Binary-event metrics for event |y| >= abs_threshold.
+    Uses all elements of y_true / p_event.
+    """
+    p_event = np.asarray(p_event, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float64)
+
+    event = (np.abs(y_true) >= abs_threshold).astype(np.float64)
+    p = np.clip(p_event, eps, 1.0 - eps)
+
+    brier = np.mean((p - event) ** 2)
+    logloss = -np.mean(event * np.log(p) + (1.0 - event) * np.log(1.0 - p))
+
+    return {
+        "threshold_abs": float(abs_threshold),
+        "brier": float(brier),
+        "logloss": float(logloss),
+        "mean_pred_prob": float(np.mean(p)),
+        "event_rate": float(np.mean(event)),
+    }
+
+
+def es_diagnostics_summary(
+    y_true_1d: np.ndarray,
+    var_pred: np.ndarray,
+    es_pred: np.ndarray,
+    alphas,
+    side: str = "lower",
+    eps: float = 1e-12,
+) -> dict:
+    """
+    Numerical ES / tail-risk diagnostics.
+
+    y_true_1d: (N,)
+    var_pred:  (N,A)
+    es_pred:   (N,A)
+    alphas:    (A,)
+    """
+    y = np.asarray(y_true_1d, dtype=np.float64).reshape(-1)
+    var_pred = np.asarray(var_pred, dtype=np.float64)
+    es_pred = np.asarray(es_pred, dtype=np.float64)
+    alphas = np.asarray(alphas, dtype=np.float64).reshape(-1)
+
+    out = {}
+
+    for k, a in enumerate(alphas):
+        var_k = var_pred[:, k]
+        es_k = es_pred[:, k]
+
+        if side == "lower":
+            hit = y < var_k
+        elif side == "upper":
+            hit = y > var_k
+        else:
+            raise ValueError("side must be 'lower' or 'upper'")
+
+        hit_f = hit.astype(np.float64)
+        obs_rate = float(np.mean(hit_f))
+        n_hits = int(np.sum(hit))
+        coverage_ratio = float(obs_rate / max(a, eps))
+        coverage_abs_err = float(abs(obs_rate - a))
+
+        # unconditional ES moment:
+        # E[ 1_{tail} * Y - alpha * ES ] = 0
+        m = hit_f * y - a * es_k
+        m_mean = float(np.mean(m))
+        m_std = float(np.std(m, ddof=1)) if len(m) > 1 else 0.0
+        m_t = float(m_mean / (m_std / np.sqrt(max(len(m), 1)) + eps))
+
+        if n_hits > 0:
+            emp_es = float(np.mean(y[hit]))
+            pred_es_hits = float(np.mean(es_k[hit]))
+            es_gap = float(emp_es - pred_es_hits)
+            es_rel_err = float(es_gap / (abs(emp_es) + eps))
+        else:
+            emp_es = np.nan
+            pred_es_hits = np.nan
+            es_gap = np.nan
+            es_rel_err = np.nan
+
+        key = f"alpha_{a:.4f}"
+        out[key] = {
+            "n_hits": int(n_hits),
+            "obs_rate": obs_rate,
+            "coverage_ratio": coverage_ratio,
+            "coverage_abs_err": coverage_abs_err,
+            "empirical_es_on_hits": emp_es,
+            "predicted_es_on_hits": pred_es_hits,
+            "es_gap": es_gap,
+            "es_rel_err": es_rel_err,
+            "es_moment_mean": m_mean,
+            "es_moment_t": m_t,
+        }
+
+    return out
+
+
+def gaussian_var_es(mu: np.ndarray, sigma: np.ndarray, alphas, side: str):
+    """
+    Exact Gaussian VaR / ES.
+
+    mu, sigma: (N,) or (B,)
+    returns:
+      var_pred: (N,A)
+      es_pred:  (N,A)
+    """
+    mu = np.asarray(mu, dtype=np.float64).reshape(-1)
+    sigma = np.asarray(sigma, dtype=np.float64).reshape(-1)
+    alphas = np.asarray(alphas, dtype=np.float64).reshape(-1)
+
+    zdist = Normal(loc=torch.tensor(0.0), scale=torch.tensor(1.0))
+
+    z_alpha = zdist.icdf(torch.tensor(alphas, dtype=torch.float64)).cpu().numpy()
+    z_one_minus = zdist.icdf(torch.tensor(1.0 - alphas, dtype=torch.float64)).cpu().numpy()
+
+    phi_alpha = np.exp(-0.5 * z_alpha**2) / math.sqrt(2.0 * math.pi)
+    phi_one_minus = np.exp(-0.5 * z_one_minus**2) / math.sqrt(2.0 * math.pi)
+
+    if side == "lower":
+        var_pred = mu[:, None] + sigma[:, None] * z_alpha[None, :]
+        es_pred = mu[:, None] - sigma[:, None] * (phi_alpha[None, :] / alphas[None, :])
+    elif side == "upper":
+        var_pred = mu[:, None] + sigma[:, None] * z_one_minus[None, :]
+        es_pred = mu[:, None] + sigma[:, None] * (phi_one_minus[None, :] / alphas[None, :])
+    else:
+        raise ValueError("side must be 'lower' or 'upper'")
+
+    return var_pred.astype(np.float32), es_pred.astype(np.float32)
+
+def plot_pit_diagnostics_for_horizons(
+    A,
+    plots_dir,
+    u_grid,
+    Q_cpu,
+    y_true,
+    horizons_ahead=(1, 12, 24),
+    title_prefix="Test set",
+):
+    """
+    Plot PIT histogram and PIT ECDF for several forecast horizons.
+
+    horizons_ahead uses human-readable horizon numbers:
+      1  -> array index 0
+      12 -> array index 11
+      24 -> array index 23
+    """
+    B, H = y_true.shape
+
+    for h_ahead in horizons_ahead:
+        h_idx = h_ahead - 1
+
+        if h_idx < 0 or h_idx >= H:
+            print(f"Skipping PIT h={h_ahead}: H={H} is too small.")
+            continue
+
+        pit_vals, pit_stats = plot_pit_hist(
+            u_grid=u_grid,
+            Q_all=Q_cpu,
+            y_true=y_true,
+            horizon=h_idx,
+            bins=20,
+            title_prefix=f"{title_prefix} {h_ahead}h ahead",
+            out_path=os.path.join(plots_dir, f"pit_h{h_ahead}.png"),
+        )
+
+        _, pit_ecdf_stats = plot_pit_ecdf(
+            u_grid=u_grid,
+            Q_all=Q_cpu,
+            y_true=y_true,
+            horizon=h_idx,
+            title_prefix=f"{title_prefix} {h_ahead}h ahead",
+            out_path=os.path.join(plots_dir, f"pit_ecdf_h{h_ahead}.png"),
+        )
+
+        A[f"pit_h{h_ahead}"] = pit_vals
+        A[f"pit_stats_h{h_ahead}"] = pit_stats
+        A[f"pit_ecdf_stats_h{h_ahead}"] = pit_ecdf_stats
+
+        # Optional backwards compatibility with your old h0 naming
+        if h_ahead == 1:
+            A["pit_h0"] = pit_vals
+            A["pit_stats_h0"] = pit_stats
+            A["pit_ecdf_stats_h0"] = pit_ecdf_stats
+
+def plot_tail_exceedance_diagnostics_for_horizons(
+    A,
+    plots_dir,
+    u_grid,
+    Q_cpu,
+    y_true,
+    horizons_ahead=(1, 12, 24),
+    alphas=(0.005, 0.01, 0.02, 0.05, 0.1, 0.2),
+    title_prefix="Test set",
+):
+    """
+    Plot tail exceedance calibration and tail exceedance ratio
+    for several forecast horizons.
+
+    horizons_ahead uses human-readable horizon numbers:
+      1  -> array index 0
+      12 -> array index 11
+      24 -> array index 23
+    """
+    B, H = y_true.shape
+
+    for h_ahead in horizons_ahead:
+        h_idx = h_ahead - 1
+
+        if h_idx < 0 or h_idx >= H:
+            print(f"Skipping tail exceedance h={h_ahead}: H={H} is too small.")
+            continue
+
+        tail_summary = plot_tail_exceedance_calibration(
+            u_grid=u_grid,
+            Q_all=Q_cpu,
+            y_true=y_true,
+            horizon=h_idx,
+            alphas=alphas,
+            title_prefix=f"{title_prefix} {h_ahead}h ahead",
+            out_path=os.path.join(plots_dir, f"tail_exceedance_h{h_ahead}.png"),
+        )
+
+        plot_tail_exceedance_ratio(
+            summary=tail_summary,
+            title_prefix=f"{title_prefix} {h_ahead}h ahead",
+            out_path=os.path.join(plots_dir, f"tail_exceedance_ratio_h{h_ahead}.png"),
+        )
+
+        A[f"tail_exceedance_h{h_ahead}"] = tail_summary
+
+        # Optional backward compatibility with your original h0 key
+        if h_ahead == 1:
+            A["tail_exceedance_h0"] = tail_summary
 
 
 if __name__ == "__main__":

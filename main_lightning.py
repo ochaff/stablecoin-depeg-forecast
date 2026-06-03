@@ -99,7 +99,7 @@ if __name__ == "__main__":
     trainer = L.Trainer(
                 devices = 1, accelerator = 'gpu',  max_epochs = args.n_epochs, logger = logger, deterministic = 'warn', 
                 callbacks = [early_stop, checkpointing, LearningRateMonitor(logging_interval='epoch')],
-                detect_anomaly = False,log_every_n_steps = 20
+                detect_anomaly = False,log_every_n_steps = 20, gradient_clip_val = 1.0
                 )
     if args.check_lr == 1 :
                 res = Tuner(trainer).lr_find(
