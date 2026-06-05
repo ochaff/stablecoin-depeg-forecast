@@ -20,6 +20,16 @@ except Exception:
 # Basic helpers
 # ============================================================
 
+model_paths = {
+    "SAINT": "3328/46ff2d0b6aa54b2886d4ac43a5cfec81/preds_test_set.pkl",
+    "TimeXer": "3328/4cdfa4f81dd941db9c271275e9c0c8c9/preds_test_set.pkl",
+    "TiDE": "./benchmark_outputs/tide_hist_exog/preds_test_set.pkl",
+    "GARCH": "./benchmark_outputs/garch_student_t/preds_test_set.pkl",
+    "ARIMA": "./arima_benchmark_eval/arima_preds_test_set.pkl",
+    "Naive": "./benchmark_outputs/naive/preds_test_set.pkl",
+}
+
+
 def _ensure_dir(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +85,51 @@ def load_forecast_pickles(model_paths, names=None):
 
     return runs
 
+def _resolve_horizons(A, horizons_ahead=None):
+    """
+    Convert human-readable horizons into zero-based indices.
+
+    Parameters
+    ----------
+    horizons_ahead:
+        None or "all" -> all horizons.
+        int -> one horizon.
+        iterable[int] -> selected horizons.
+
+    Returns
+    -------
+    h_idx : np.ndarray
+        Zero-based horizon indices.
+    label : str
+        Human-readable label.
+    """
+    H = A["true"].shape[1]
+
+    if horizons_ahead is None or horizons_ahead == "all":
+        return np.arange(H), f"1-{H}h"
+
+    if isinstance(horizons_ahead, (int, np.integer)):
+        horizons_ahead = [int(horizons_ahead)]
+
+    h_idx = np.array([int(h) - 1 for h in horizons_ahead], dtype=int)
+
+    if np.any(h_idx < 0) or np.any(h_idx >= H):
+        raise ValueError(f"Invalid horizons {horizons_ahead}; model has H={H}")
+
+    if len(h_idx) == 1:
+        label = f"{horizons_ahead[0]}h"
+    else:
+        label = ",".join([f"{h}h" for h in horizons_ahead])
+
+    return h_idx, label
+
+
+def _mean_selected(loss_bh, h_idx):
+    """
+    Mean loss over all observations and selected horizons.
+    """
+    loss_bh = np.asarray(loss_bh, dtype=np.float64)
+    return float(np.nanmean(loss_bh[:, h_idx]))
 
 def check_common_grid_and_shape(runs, atol=1e-8):
     """

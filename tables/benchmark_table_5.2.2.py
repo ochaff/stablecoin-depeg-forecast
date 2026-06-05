@@ -23,7 +23,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from tables.benchmark_utils import (
+from benchmark_utils import (
     load_forecast_pickles,
     check_common_grid_and_shape,
     compute_abs_threshold_event_prob,
@@ -33,6 +33,7 @@ from tables.benchmark_utils import (
     get_twcrps_per_horizon,
     chain_threshold_np,
     trapezoid_weights_for_u_np,
+    model_paths,
 )
 
 try:
@@ -733,14 +734,7 @@ def make_section_522_benchmark_outputs(
 # Example usage with your current models
 # ============================================================
 
-model_paths = {
-    "SAINT": "3328/a4b021c593f044fabee4a9207a5d090f/preds_test_set.pkl",
-    "TimeXer": "3328/97e7458094704027a289909bc87a8058/preds_test_set.pkl",
-    "TiDE": "./benchmark_outputs/tide_hist_exog/preds_test_set.pkl",
-    "GARCH": "./benchmark_outputs/garch_student_t/preds_test_set.pkl",
-    "ARIMA": "./arima_benchmark_eval/arima_preds_test_set.pkl",
-    "Naive": "./benchmark_outputs/naive/preds_test_set.pkl",
-}
+
 
 bench_result = make_section_522_benchmark_outputs(
     model_paths=model_paths,
@@ -750,7 +744,7 @@ bench_result = make_section_522_benchmark_outputs(
     tw_threshold_low=-10.0,
     tw_threshold_high=10.0,
     tw_smooth_h=1.0,
-    quantile_levels=(0.01, 0.05, 0.50, 0.95, 0.99),
+    quantile_levels=(0.01, 0.05, 0.95, 0.99),
 )
 
 # Access the main tables

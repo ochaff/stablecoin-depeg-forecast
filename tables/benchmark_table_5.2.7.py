@@ -25,6 +25,7 @@ from benchmark_utils import (
     check_common_grid_and_shape,
     quantiles_from_u_grid,
     _resolve_horizons,
+    model_paths,
 )
 
 try:
@@ -682,14 +683,6 @@ def make_section_527_tail_backtesting_outputs(
 # Example usage
 # ============================================================
 
-model_paths = {
-    "SAINT": "3328/a4b021c593f044fabee4a9207a5d090f/preds_test_set.pkl",
-    "TimeXer": "3328/97e7458094704027a289909bc87a8058/preds_test_set.pkl",
-    "TiDE": "./benchmark_outputs/tide_hist_exog/preds_test_set.pkl",
-    "GARCH": "./benchmark_outputs/garch_student_t/preds_test_set.pkl",
-    "ARIMA": "./arima_benchmark_eval/arima_preds_test_set.pkl",
-    "Naive": "./benchmark_outputs/naive/preds_test_set.pkl",
-}
 
 section_527_result = make_section_527_tail_backtesting_outputs(
     model_paths=model_paths,
