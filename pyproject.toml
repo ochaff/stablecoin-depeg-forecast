@@ -1,0 +1,40 @@
+[project]
+name = "stablecoin-depeg-forecast"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.4.6",
+    "pandas>=3.0.5",
+    "pyarrow>=25.0.1",
+    "python-dotenv>=1.2.3",
+    "requests>=2.34.2",
+    "scipy>=1.17.1",
+]
+
+[dependency-groups]
+agentic = [
+    "langchain>=1,<2",
+    "langchain-openai>=1,<2",
+    "langgraph>=1,<2",
+    "pydantic>=2.7,<3",
+]
+classifier = [
+    "scikit-learn>=1.9.0",
+    "shap>=0.51.0",
+]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.6",
+]
+model = [
+    "einops>=0.8.2",
+    "lightning>=2.6.5",
+    "matplotlib>=3.11.1",
+    "mlflow>=3.16.0",
+    "torch>=2.14.0",
+]
+[tool.uv]
+package = false
+default-groups = ["model", "classifier", "agentic"]
