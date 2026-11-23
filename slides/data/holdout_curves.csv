@@ -1,0 +1,701 @@
+model,family,kind,r,V
+ANGEL exceedance,forecast,standard,0.01,0.7632996632996631
+ANGEL exceedance,forecast,standard,0.02,0.7258503401360543
+ANGEL exceedance,forecast,standard,0.03,0.6876288659793816
+ANGEL exceedance,forecast,standard,0.04,0.6486111111111111
+ANGEL exceedance,forecast,standard,0.05,0.6087719298245614
+ANGEL exceedance,forecast,standard,0.06,0.5687943262411349
+ANGEL exceedance,forecast,standard,0.07,0.5351254480286739
+ANGEL exceedance,forecast,standard,0.08,0.5043478260869564
+ANGEL exceedance,forecast,standard,0.09,0.4758241758241759
+ANGEL exceedance,forecast,standard,0.1,0.4518518518518519
+ANGEL exceedance,forecast,standard,0.11,0.4277153558052434
+ANGEL exceedance,forecast,standard,0.12,0.40606060606060607
+ANGEL exceedance,forecast,standard,0.13,0.38582375478927206
+ANGEL exceedance,forecast,standard,0.14,0.36666666666666664
+ANGEL exceedance,forecast,standard,0.15,0.3470588235294118
+ANGEL exceedance,forecast,standard,0.16,0.326984126984127
+ANGEL exceedance,forecast,standard,0.17,0.306425702811245
+ANGEL exceedance,forecast,standard,0.18,0.28536585365853656
+ANGEL exceedance,forecast,standard,0.19,0.2637860082304526
+ANGEL exceedance,forecast,standard,0.2,0.24166666666666667
+ANGEL exceedance,forecast,standard,0.21,0.21898734177215187
+ANGEL exceedance,forecast,standard,0.22,0.1957264957264957
+ANGEL exceedance,forecast,standard,0.23,0.1718614718614718
+ANGEL exceedance,forecast,standard,0.24,0.15263157894736842
+ANGEL exceedance,forecast,standard,0.25,0.13333333333333333
+ANGEL exceedance,forecast,standard,0.26,0.11351351351351352
+ANGEL exceedance,forecast,standard,0.27,0.0931506849315068
+ANGEL exceedance,forecast,standard,0.28,0.07222222222222215
+ANGEL exceedance,forecast,standard,0.29,0.0507042253521127
+ANGEL exceedance,forecast,standard,0.3,0.028571428571428595
+ANGEL exceedance,forecast,standard,0.31,0.020289855072463767
+ANGEL exceedance,forecast,standard,0.32,0.011764705882352953
+ANGEL exceedance,forecast,standard,0.33,0.0029850746268656526
+ANGEL exceedance,forecast,standard,0.34,0.0
+ANGEL exceedance,forecast,standard,0.35,0.0
+ANGEL exceedance,forecast,standard,0.36,0.0
+ANGEL exceedance,forecast,standard,0.37,0.0
+ANGEL exceedance,forecast,standard,0.38,0.0
+ANGEL exceedance,forecast,standard,0.39,0.0
+ANGEL exceedance,forecast,standard,0.4,0.0
+ANGEL exceedance,forecast,standard,0.41,0.0
+ANGEL exceedance,forecast,standard,0.42,0.0
+ANGEL exceedance,forecast,standard,0.43,0.0
+ANGEL exceedance,forecast,standard,0.44,0.0
+ANGEL exceedance,forecast,standard,0.45,0.0
+ANGEL exceedance,forecast,standard,0.46,0.0
+ANGEL exceedance,forecast,standard,0.47,0.0
+ANGEL exceedance,forecast,standard,0.48,0.0
+ANGEL exceedance,forecast,standard,0.49,0.0
+ANGEL exceedance,forecast,standard,0.5,0.0
+ANGEL exceedance,forecast,lead,0.01,0.53673616865108
+ANGEL exceedance,forecast,lead,0.02,0.46271735078807713
+ANGEL exceedance,forecast,lead,0.03,0.4172252937235624
+ANGEL exceedance,forecast,lead,0.04,0.3738852192331242
+ANGEL exceedance,forecast,lead,0.05,0.3311541879593573
+ANGEL exceedance,forecast,lead,0.06,0.2875139858398136
+ANGEL exceedance,forecast,lead,0.07,0.2450208027112967
+ANGEL exceedance,forecast,lead,0.08,0.20391389246764388
+ANGEL exceedance,forecast,lead,0.09,0.16884432889438042
+ANGEL exceedance,forecast,lead,0.1,0.14025676636559412
+ANGEL exceedance,forecast,lead,0.11,0.11248816694052717
+ANGEL exceedance,forecast,lead,0.12,0.08429458639398124
+ANGEL exceedance,forecast,lead,0.13,0.060879488499953754
+ANGEL exceedance,forecast,lead,0.14,0.042901714557893704
+ANGEL exceedance,forecast,lead,0.15,0.024582911921442126
+ANGEL exceedance,forecast,lead,0.16,0.00881710899157338
+ANGEL exceedance,forecast,lead,0.17,0.0
+ANGEL exceedance,forecast,lead,0.18,0.0
+ANGEL exceedance,forecast,lead,0.19,0.0
+ANGEL exceedance,forecast,lead,0.2,0.0
+ANGEL exceedance,forecast,lead,0.21,0.0
+ANGEL exceedance,forecast,lead,0.22,0.0
+ANGEL exceedance,forecast,lead,0.23,0.0
+ANGEL exceedance,forecast,lead,0.24,0.0
+ANGEL exceedance,forecast,lead,0.25,0.0
+ANGEL exceedance,forecast,lead,0.26,0.0
+ANGEL exceedance,forecast,lead,0.27,0.0
+ANGEL exceedance,forecast,lead,0.28,0.0
+ANGEL exceedance,forecast,lead,0.29,0.0
+ANGEL exceedance,forecast,lead,0.3,0.0
+ANGEL exceedance,forecast,lead,0.31,0.0
+ANGEL exceedance,forecast,lead,0.32,0.0
+ANGEL exceedance,forecast,lead,0.33,0.0
+ANGEL exceedance,forecast,lead,0.34,0.0
+ANGEL exceedance,forecast,lead,0.35,0.0
+ANGEL exceedance,forecast,lead,0.36,0.0
+ANGEL exceedance,forecast,lead,0.37,0.0
+ANGEL exceedance,forecast,lead,0.38,0.0
+ANGEL exceedance,forecast,lead,0.39,0.0
+ANGEL exceedance,forecast,lead,0.4,0.0
+ANGEL exceedance,forecast,lead,0.41,0.0
+ANGEL exceedance,forecast,lead,0.42,0.0
+ANGEL exceedance,forecast,lead,0.43,0.0
+ANGEL exceedance,forecast,lead,0.44,0.0
+ANGEL exceedance,forecast,lead,0.45,0.0
+ANGEL exceedance,forecast,lead,0.46,0.0
+ANGEL exceedance,forecast,lead,0.47,0.0
+ANGEL exceedance,forecast,lead,0.48,0.0
+ANGEL exceedance,forecast,lead,0.49,0.0
+ANGEL exceedance,forecast,lead,0.5,0.0
+ARIMA,forecast,standard,0.01,0.5777777777777777
+ARIMA,forecast,standard,0.02,0.5551020408163264
+ARIMA,forecast,standard,0.03,0.531958762886598
+ARIMA,forecast,standard,0.04,0.5083333333333333
+ARIMA,forecast,standard,0.05,0.4842105263157894
+ARIMA,forecast,standard,0.06,0.4595744680851065
+ARIMA,forecast,standard,0.07,0.43440860215053767
+ARIMA,forecast,standard,0.08,0.40869565217391296
+ARIMA,forecast,standard,0.09,0.38241758241758245
+ARIMA,forecast,standard,0.1,0.3555555555555555
+ARIMA,forecast,standard,0.11,0.32808988764044944
+ARIMA,forecast,standard,0.12,0.3
+ARIMA,forecast,standard,0.13,0.271264367816092
+ARIMA,forecast,standard,0.14,0.24186046511627904
+ARIMA,forecast,standard,0.15,0.2117647058823529
+ARIMA,forecast,standard,0.16,0.1809523809523809
+ARIMA,forecast,standard,0.17,0.14939759036144573
+ARIMA,forecast,standard,0.18,0.1170731707317073
+ARIMA,forecast,standard,0.19,0.08395061728395056
+ARIMA,forecast,standard,0.2,0.04999999999999999
+ARIMA,forecast,standard,0.21,0.02784810126582281
+ARIMA,forecast,standard,0.22,0.0051282051282051325
+ARIMA,forecast,standard,0.23,0.0
+ARIMA,forecast,standard,0.24,0.0
+ARIMA,forecast,standard,0.25,0.0
+ARIMA,forecast,standard,0.26,0.0
+ARIMA,forecast,standard,0.27,0.0
+ARIMA,forecast,standard,0.28,0.0
+ARIMA,forecast,standard,0.29,0.0
+ARIMA,forecast,standard,0.3,0.0
+ARIMA,forecast,standard,0.31,0.0
+ARIMA,forecast,standard,0.32,0.0
+ARIMA,forecast,standard,0.33,0.0
+ARIMA,forecast,standard,0.34,0.0
+ARIMA,forecast,standard,0.35,0.0
+ARIMA,forecast,standard,0.36,0.0
+ARIMA,forecast,standard,0.37,0.0
+ARIMA,forecast,standard,0.38,0.0
+ARIMA,forecast,standard,0.39,0.0
+ARIMA,forecast,standard,0.4,0.0
+ARIMA,forecast,standard,0.41,0.0
+ARIMA,forecast,standard,0.42,0.0
+ARIMA,forecast,standard,0.43,0.0
+ARIMA,forecast,standard,0.44,0.0
+ARIMA,forecast,standard,0.45,0.0
+ARIMA,forecast,standard,0.46,0.0
+ARIMA,forecast,standard,0.47,0.0
+ARIMA,forecast,standard,0.48,0.0
+ARIMA,forecast,standard,0.49,0.0
+ARIMA,forecast,standard,0.5,0.0
+ARIMA,forecast,lead,0.01,0.4806479248093347
+ARIMA,forecast,lead,0.02,0.4221667336874389
+ARIMA,forecast,lead,0.03,0.362601444338493
+ARIMA,forecast,lead,0.04,0.30588737349167383
+ARIMA,forecast,lead,0.05,0.2501598741243578
+ARIMA,forecast,lead,0.06,0.21257902111933552
+ARIMA,forecast,lead,0.07,0.18475729116541373
+ARIMA,forecast,lead,0.08,0.15633074101711697
+ARIMA,forecast,lead,0.09,0.12727943154789195
+ARIMA,forecast,lead,0.1,0.0975825374478158
+ARIMA,forecast,lead,0.11,0.06721829743801576
+ARIMA,forecast,lead,0.12,0.03616396109061698
+ARIMA,forecast,lead,0.13,0.004395731981100785
+ARIMA,forecast,lead,0.14,0.0
+ARIMA,forecast,lead,0.15,0.0
+ARIMA,forecast,lead,0.16,0.0
+ARIMA,forecast,lead,0.17,0.0
+ARIMA,forecast,lead,0.18,0.0
+ARIMA,forecast,lead,0.19,0.0
+ARIMA,forecast,lead,0.2,0.0
+ARIMA,forecast,lead,0.21,0.0
+ARIMA,forecast,lead,0.22,0.0
+ARIMA,forecast,lead,0.23,0.0
+ARIMA,forecast,lead,0.24,0.0
+ARIMA,forecast,lead,0.25,0.0
+ARIMA,forecast,lead,0.26,0.0
+ARIMA,forecast,lead,0.27,0.0
+ARIMA,forecast,lead,0.28,0.0
+ARIMA,forecast,lead,0.29,0.0
+ARIMA,forecast,lead,0.3,0.0
+ARIMA,forecast,lead,0.31,0.0
+ARIMA,forecast,lead,0.32,0.0
+ARIMA,forecast,lead,0.33,0.0
+ARIMA,forecast,lead,0.34,0.0
+ARIMA,forecast,lead,0.35,0.0
+ARIMA,forecast,lead,0.36,0.0
+ARIMA,forecast,lead,0.37,0.0
+ARIMA,forecast,lead,0.38,0.0
+ARIMA,forecast,lead,0.39,0.0
+ARIMA,forecast,lead,0.4,0.0
+ARIMA,forecast,lead,0.41,0.0
+ARIMA,forecast,lead,0.42,0.0
+ARIMA,forecast,lead,0.43,0.0
+ARIMA,forecast,lead,0.44,0.0
+ARIMA,forecast,lead,0.45,0.0
+ARIMA,forecast,lead,0.46,0.0
+ARIMA,forecast,lead,0.47,0.0
+ARIMA,forecast,lead,0.48,0.0
+ARIMA,forecast,lead,0.49,0.0
+ARIMA,forecast,lead,0.5,0.0
+GARCH-t,forecast,standard,0.01,0.5555555555555556
+GARCH-t,forecast,standard,0.02,0.5102040816326531
+GARCH-t,forecast,standard,0.03,0.4639175257731959
+GARCH-t,forecast,standard,0.04,0.4166666666666667
+GARCH-t,forecast,standard,0.05,0.3684210526315789
+GARCH-t,forecast,standard,0.06,0.31914893617021284
+GARCH-t,forecast,standard,0.07,0.2946236559139785
+GARCH-t,forecast,standard,0.08,0.27826086956521734
+GARCH-t,forecast,standard,0.09,0.26153846153846155
+GARCH-t,forecast,standard,0.1,0.24444444444444446
+GARCH-t,forecast,standard,0.11,0.22696629213483147
+GARCH-t,forecast,standard,0.12,0.20909090909090905
+GARCH-t,forecast,standard,0.13,0.19080459770114946
+GARCH-t,forecast,standard,0.14,0.1720930232558139
+GARCH-t,forecast,standard,0.15,0.15294117647058827
+GARCH-t,forecast,standard,0.16,0.13333333333333333
+GARCH-t,forecast,standard,0.17,0.11325301204819278
+GARCH-t,forecast,standard,0.18,0.0926829268292683
+GARCH-t,forecast,standard,0.19,0.07160493827160494
+GARCH-t,forecast,standard,0.2,0.04999999999999999
+GARCH-t,forecast,standard,0.21,0.02784810126582281
+GARCH-t,forecast,standard,0.22,0.0051282051282051325
+GARCH-t,forecast,standard,0.23,0.0
+GARCH-t,forecast,standard,0.24,0.0
+GARCH-t,forecast,standard,0.25,0.0
+GARCH-t,forecast,standard,0.26,0.0
+GARCH-t,forecast,standard,0.27,0.0
+GARCH-t,forecast,standard,0.28,0.0
+GARCH-t,forecast,standard,0.29,0.0
+GARCH-t,forecast,standard,0.3,0.0
+GARCH-t,forecast,standard,0.31,0.0
+GARCH-t,forecast,standard,0.32,0.0
+GARCH-t,forecast,standard,0.33,0.0
+GARCH-t,forecast,standard,0.34,0.0
+GARCH-t,forecast,standard,0.35,0.0
+GARCH-t,forecast,standard,0.36,0.0
+GARCH-t,forecast,standard,0.37,0.0
+GARCH-t,forecast,standard,0.38,0.0
+GARCH-t,forecast,standard,0.39,0.0
+GARCH-t,forecast,standard,0.4,0.0
+GARCH-t,forecast,standard,0.41,0.0
+GARCH-t,forecast,standard,0.42,0.0
+GARCH-t,forecast,standard,0.43,0.0
+GARCH-t,forecast,standard,0.44,0.0
+GARCH-t,forecast,standard,0.45,0.0
+GARCH-t,forecast,standard,0.46,0.0
+GARCH-t,forecast,standard,0.47,0.0
+GARCH-t,forecast,standard,0.48,0.0
+GARCH-t,forecast,standard,0.49,0.0
+GARCH-t,forecast,standard,0.5,0.0
+GARCH-t,forecast,lead,0.01,0.5129939091031788
+GARCH-t,forecast,lead,0.02,0.4672081342299632
+GARCH-t,forecast,lead,0.03,0.420478322794014
+GARCH-t,forecast,lead,0.04,0.3727749736537748
+GARCH-t,forecast,lead,0.05,0.32406734351440447
+GARCH-t,forecast,lead,0.06,0.2743233808557958
+GARCH-t,forecast,lead,0.07,0.22350965559788677
+GARCH-t,forecast,lead,0.08,0.17159128417892647
+GARCH-t,forecast,lead,0.09,0.12581145956789092
+GARCH-t,forecast,lead,0.1,0.10276492108726051
+GARCH-t,forecast,lead,0.11,0.07920048288497863
+GARCH-t,forecast,lead,0.12,0.05510048928938809
+GARCH-t,forecast,lead,0.13,0.030446472873844187
+GARCH-t,forecast,lead,0.14,0.005219107261659269
+GARCH-t,forecast,lead,0.15,0.0
+GARCH-t,forecast,lead,0.16,0.0
+GARCH-t,forecast,lead,0.17,0.0
+GARCH-t,forecast,lead,0.18,0.0
+GARCH-t,forecast,lead,0.19,0.0
+GARCH-t,forecast,lead,0.2,0.0
+GARCH-t,forecast,lead,0.21,0.0
+GARCH-t,forecast,lead,0.22,0.0
+GARCH-t,forecast,lead,0.23,0.0
+GARCH-t,forecast,lead,0.24,0.0
+GARCH-t,forecast,lead,0.25,0.0
+GARCH-t,forecast,lead,0.26,0.0
+GARCH-t,forecast,lead,0.27,0.0
+GARCH-t,forecast,lead,0.28,0.0
+GARCH-t,forecast,lead,0.29,0.0
+GARCH-t,forecast,lead,0.3,0.0
+GARCH-t,forecast,lead,0.31,0.0
+GARCH-t,forecast,lead,0.32,0.0
+GARCH-t,forecast,lead,0.33,0.0
+GARCH-t,forecast,lead,0.34,0.0
+GARCH-t,forecast,lead,0.35,0.0
+GARCH-t,forecast,lead,0.36,0.0
+GARCH-t,forecast,lead,0.37,0.0
+GARCH-t,forecast,lead,0.38,0.0
+GARCH-t,forecast,lead,0.39,0.0
+GARCH-t,forecast,lead,0.4,0.0
+GARCH-t,forecast,lead,0.41,0.0
+GARCH-t,forecast,lead,0.42,0.0
+GARCH-t,forecast,lead,0.43,0.0
+GARCH-t,forecast,lead,0.44,0.0
+GARCH-t,forecast,lead,0.45,0.0
+GARCH-t,forecast,lead,0.46,0.0
+GARCH-t,forecast,lead,0.47,0.0
+GARCH-t,forecast,lead,0.48,0.0
+GARCH-t,forecast,lead,0.49,0.0
+GARCH-t,forecast,lead,0.5,0.0
+TiDE forecast,forecast,standard,0.01,0.5515151515151515
+TiDE forecast,forecast,standard,0.02,0.5020408163265305
+TiDE forecast,forecast,standard,0.03,0.4515463917525773
+TiDE forecast,forecast,standard,0.04,0.4
+TiDE forecast,forecast,standard,0.05,0.34736842105263155
+TiDE forecast,forecast,standard,0.06,0.29361702127659584
+TiDE forecast,forecast,standard,0.07,0.2645161290322581
+TiDE forecast,forecast,standard,0.08,0.2434782608695652
+TiDE forecast,forecast,standard,0.09,0.221978021978022
+TiDE forecast,forecast,standard,0.1,0.19999999999999998
+TiDE forecast,forecast,standard,0.11,0.17752808988764046
+TiDE forecast,forecast,standard,0.12,0.15454545454545457
+TiDE forecast,forecast,standard,0.13,0.13103448275862067
+TiDE forecast,forecast,standard,0.14,0.10697674418604651
+TiDE forecast,forecast,standard,0.15,0.08235294117647061
+TiDE forecast,forecast,standard,0.16,0.05714285714285714
+TiDE forecast,forecast,standard,0.17,0.03132530120481926
+TiDE forecast,forecast,standard,0.18,0.004878048780487808
+TiDE forecast,forecast,standard,0.19,0.0
+TiDE forecast,forecast,standard,0.2,0.0
+TiDE forecast,forecast,standard,0.21,0.0
+TiDE forecast,forecast,standard,0.22,0.0
+TiDE forecast,forecast,standard,0.23,0.0
+TiDE forecast,forecast,standard,0.24,0.0
+TiDE forecast,forecast,standard,0.25,0.0
+TiDE forecast,forecast,standard,0.26,0.0
+TiDE forecast,forecast,standard,0.27,0.0
+TiDE forecast,forecast,standard,0.28,0.0
+TiDE forecast,forecast,standard,0.29,0.0
+TiDE forecast,forecast,standard,0.3,0.0
+TiDE forecast,forecast,standard,0.31,0.0
+TiDE forecast,forecast,standard,0.32,0.0
+TiDE forecast,forecast,standard,0.33,0.0
+TiDE forecast,forecast,standard,0.34,0.0
+TiDE forecast,forecast,standard,0.35,0.0
+TiDE forecast,forecast,standard,0.36,0.0
+TiDE forecast,forecast,standard,0.37,0.0
+TiDE forecast,forecast,standard,0.38,0.0
+TiDE forecast,forecast,standard,0.39,0.0
+TiDE forecast,forecast,standard,0.4,0.0
+TiDE forecast,forecast,standard,0.41,0.0
+TiDE forecast,forecast,standard,0.42,0.0
+TiDE forecast,forecast,standard,0.43,0.0
+TiDE forecast,forecast,standard,0.44,0.0
+TiDE forecast,forecast,standard,0.45,0.0
+TiDE forecast,forecast,standard,0.46,0.0
+TiDE forecast,forecast,standard,0.47,0.0
+TiDE forecast,forecast,standard,0.48,0.0
+TiDE forecast,forecast,standard,0.49,0.0
+TiDE forecast,forecast,standard,0.5,0.0
+TiDE forecast,forecast,lead,0.01,0.5881826866495012
+TiDE forecast,forecast,lead,0.02,0.5207151653492598
+TiDE forecast,forecast,lead,0.03,0.4518565611836346
+TiDE forecast,forecast,lead,0.04,0.38156340281459916
+TiDE forecast,forecast,lead,0.05,0.3097903885320636
+TiDE forecast,forecast,lead,0.06,0.24238459629086423
+TiDE forecast,forecast,lead,0.07,0.186926368140353
+TiDE forecast,forecast,lead,0.08,0.13026252637827868
+TiDE forecast,forecast,lead,0.09,0.10383704834405613
+TiDE forecast,forecast,lead,0.1,0.08054634974780106
+TiDE forecast,forecast,lead,0.11,0.05673226468592959
+TiDE forecast,forecast,lead,0.12,0.03237695043870196
+TiDE forecast,forecast,lead,0.13,0.007461743931479376
+TiDE forecast,forecast,lead,0.14,0.0
+TiDE forecast,forecast,lead,0.15,0.0
+TiDE forecast,forecast,lead,0.16,0.0
+TiDE forecast,forecast,lead,0.17,0.0
+TiDE forecast,forecast,lead,0.18,0.0
+TiDE forecast,forecast,lead,0.19,0.0
+TiDE forecast,forecast,lead,0.2,0.0
+TiDE forecast,forecast,lead,0.21,0.0
+TiDE forecast,forecast,lead,0.22,0.0
+TiDE forecast,forecast,lead,0.23,0.0
+TiDE forecast,forecast,lead,0.24,0.0
+TiDE forecast,forecast,lead,0.25,0.0
+TiDE forecast,forecast,lead,0.26,0.0
+TiDE forecast,forecast,lead,0.27,0.0
+TiDE forecast,forecast,lead,0.28,0.0
+TiDE forecast,forecast,lead,0.29,0.0
+TiDE forecast,forecast,lead,0.3,0.0
+TiDE forecast,forecast,lead,0.31,0.0
+TiDE forecast,forecast,lead,0.32,0.0
+TiDE forecast,forecast,lead,0.33,0.0
+TiDE forecast,forecast,lead,0.34,0.0
+TiDE forecast,forecast,lead,0.35,0.0
+TiDE forecast,forecast,lead,0.36,0.0
+TiDE forecast,forecast,lead,0.37,0.0
+TiDE forecast,forecast,lead,0.38,0.0
+TiDE forecast,forecast,lead,0.39,0.0
+TiDE forecast,forecast,lead,0.4,0.0
+TiDE forecast,forecast,lead,0.41,0.0
+TiDE forecast,forecast,lead,0.42,0.0
+TiDE forecast,forecast,lead,0.43,0.0
+TiDE forecast,forecast,lead,0.44,0.0
+TiDE forecast,forecast,lead,0.45,0.0
+TiDE forecast,forecast,lead,0.46,0.0
+TiDE forecast,forecast,lead,0.47,0.0
+TiDE forecast,forecast,lead,0.48,0.0
+TiDE forecast,forecast,lead,0.49,0.0
+TiDE forecast,forecast,lead,0.5,0.0
+TimeXer forecast,forecast,standard,0.01,0.7636363636363636
+TimeXer forecast,forecast,standard,0.02,0.7265306122448979
+TimeXer forecast,forecast,standard,0.03,0.688659793814433
+TimeXer forecast,forecast,standard,0.04,0.65
+TimeXer forecast,forecast,standard,0.05,0.6105263157894737
+TimeXer forecast,forecast,standard,0.06,0.570212765957447
+TimeXer forecast,forecast,standard,0.07,0.5290322580645161
+TimeXer forecast,forecast,standard,0.08,0.4869565217391304
+TimeXer forecast,forecast,standard,0.09,0.443956043956044
+TimeXer forecast,forecast,standard,0.1,0.39999999999999997
+TimeXer forecast,forecast,standard,0.11,0.3550561797752809
+TimeXer forecast,forecast,standard,0.12,0.30909090909090914
+TimeXer forecast,forecast,standard,0.13,0.26206896551724135
+TimeXer forecast,forecast,standard,0.14,0.21395348837209302
+TimeXer forecast,forecast,standard,0.15,0.16470588235294123
+TimeXer forecast,forecast,standard,0.16,0.11428571428571428
+TimeXer forecast,forecast,standard,0.17,0.06265060240963852
+TimeXer forecast,forecast,standard,0.18,0.009756097560975617
+TimeXer forecast,forecast,standard,0.19,0.0
+TimeXer forecast,forecast,standard,0.2,0.0
+TimeXer forecast,forecast,standard,0.21,0.0
+TimeXer forecast,forecast,standard,0.22,0.0
+TimeXer forecast,forecast,standard,0.23,0.0
+TimeXer forecast,forecast,standard,0.24,0.0
+TimeXer forecast,forecast,standard,0.25,0.0
+TimeXer forecast,forecast,standard,0.26,0.0
+TimeXer forecast,forecast,standard,0.27,0.0
+TimeXer forecast,forecast,standard,0.28,0.0
+TimeXer forecast,forecast,standard,0.29,0.0
+TimeXer forecast,forecast,standard,0.3,0.0
+TimeXer forecast,forecast,standard,0.31,0.0
+TimeXer forecast,forecast,standard,0.32,0.0
+TimeXer forecast,forecast,standard,0.33,0.0
+TimeXer forecast,forecast,standard,0.34,0.0
+TimeXer forecast,forecast,standard,0.35,0.0
+TimeXer forecast,forecast,standard,0.36,0.0
+TimeXer forecast,forecast,standard,0.37,0.0
+TimeXer forecast,forecast,standard,0.38,0.0
+TimeXer forecast,forecast,standard,0.39,0.0
+TimeXer forecast,forecast,standard,0.4,0.0
+TimeXer forecast,forecast,standard,0.41,0.0
+TimeXer forecast,forecast,standard,0.42,0.0
+TimeXer forecast,forecast,standard,0.43,0.0
+TimeXer forecast,forecast,standard,0.44,0.0
+TimeXer forecast,forecast,standard,0.45,0.0
+TimeXer forecast,forecast,standard,0.46,0.0
+TimeXer forecast,forecast,standard,0.47,0.0
+TimeXer forecast,forecast,standard,0.48,0.0
+TimeXer forecast,forecast,standard,0.49,0.0
+TimeXer forecast,forecast,standard,0.5,0.0
+TimeXer forecast,forecast,lead,0.01,0.6186886517316915
+TimeXer forecast,forecast,lead,0.02,0.5412709730558796
+TimeXer forecast,forecast,lead,0.03,0.4911809848166113
+TimeXer forecast,forecast,lead,0.04,0.44004745519209265
+TimeXer forecast,forecast,lead,0.05,0.3878374302450033
+TimeXer forecast,forecast,lead,0.06,0.33451655374286826
+TimeXer forecast,forecast,lead,0.07,0.2800489917658472
+TimeXer forecast,forecast,lead,0.08,0.22439735239764194
+TimeXer forecast,forecast,lead,0.09,0.1675226001212982
+TimeXer forecast,forecast,lead,0.1,0.10938396450806169
+TimeXer forecast,forecast,lead,0.11,0.056429284082278305
+TimeXer forecast,forecast,lead,0.12,0.004797800638861792
+TimeXer forecast,forecast,lead,0.13,0.0
+TimeXer forecast,forecast,lead,0.14,0.0
+TimeXer forecast,forecast,lead,0.15,0.0
+TimeXer forecast,forecast,lead,0.16,0.0
+TimeXer forecast,forecast,lead,0.17,0.0
+TimeXer forecast,forecast,lead,0.18,0.0
+TimeXer forecast,forecast,lead,0.19,0.0
+TimeXer forecast,forecast,lead,0.2,0.0
+TimeXer forecast,forecast,lead,0.21,0.0
+TimeXer forecast,forecast,lead,0.22,0.0
+TimeXer forecast,forecast,lead,0.23,0.0
+TimeXer forecast,forecast,lead,0.24,0.0
+TimeXer forecast,forecast,lead,0.25,0.0
+TimeXer forecast,forecast,lead,0.26,0.0
+TimeXer forecast,forecast,lead,0.27,0.0
+TimeXer forecast,forecast,lead,0.28,0.0
+TimeXer forecast,forecast,lead,0.29,0.0
+TimeXer forecast,forecast,lead,0.3,0.0
+TimeXer forecast,forecast,lead,0.31,0.0
+TimeXer forecast,forecast,lead,0.32,0.0
+TimeXer forecast,forecast,lead,0.33,0.0
+TimeXer forecast,forecast,lead,0.34,0.0
+TimeXer forecast,forecast,lead,0.35,0.0
+TimeXer forecast,forecast,lead,0.36,0.0
+TimeXer forecast,forecast,lead,0.37,0.0
+TimeXer forecast,forecast,lead,0.38,0.0
+TimeXer forecast,forecast,lead,0.39,0.0
+TimeXer forecast,forecast,lead,0.4,0.0
+TimeXer forecast,forecast,lead,0.41,0.0
+TimeXer forecast,forecast,lead,0.42,0.0
+TimeXer forecast,forecast,lead,0.43,0.0
+TimeXer forecast,forecast,lead,0.44,0.0
+TimeXer forecast,forecast,lead,0.45,0.0
+TimeXer forecast,forecast,lead,0.46,0.0
+TimeXer forecast,forecast,lead,0.47,0.0
+TimeXer forecast,forecast,lead,0.48,0.0
+TimeXer forecast,forecast,lead,0.49,0.0
+TimeXer forecast,forecast,lead,0.5,0.0
+Kumo,classifier,standard,0.01,0.9393939393939394
+Kumo,classifier,standard,0.02,0.8775510204081631
+Kumo,classifier,standard,0.03,0.8144329896907218
+Kumo,classifier,standard,0.04,0.75
+Kumo,classifier,standard,0.05,0.6842105263157895
+Kumo,classifier,standard,0.06,0.6170212765957448
+Kumo,classifier,standard,0.07,0.5591397849462365
+Kumo,classifier,standard,0.08,0.5217391304347825
+Kumo,classifier,standard,0.09,0.4835164835164836
+Kumo,classifier,standard,0.1,0.4444444444444444
+Kumo,classifier,standard,0.11,0.40449438202247184
+Kumo,classifier,standard,0.12,0.36363636363636365
+Kumo,classifier,standard,0.13,0.3218390804597701
+Kumo,classifier,standard,0.14,0.2790697674418604
+Kumo,classifier,standard,0.15,0.23529411764705882
+Kumo,classifier,standard,0.16,0.19047619047619044
+Kumo,classifier,standard,0.17,0.14939759036144573
+Kumo,classifier,standard,0.18,0.1170731707317073
+Kumo,classifier,standard,0.19,0.08395061728395056
+Kumo,classifier,standard,0.2,0.04999999999999993
+Kumo,classifier,standard,0.21,0.015189873417721532
+Kumo,classifier,standard,0.22,0.0
+Kumo,classifier,standard,0.23,0.0
+Kumo,classifier,standard,0.24,0.0
+Kumo,classifier,standard,0.25,0.0
+Kumo,classifier,standard,0.26,0.0
+Kumo,classifier,standard,0.27,0.0
+Kumo,classifier,standard,0.28,0.0
+Kumo,classifier,standard,0.29,0.0
+Kumo,classifier,standard,0.3,0.0
+Kumo,classifier,standard,0.31,0.0
+Kumo,classifier,standard,0.32,0.0
+Kumo,classifier,standard,0.33,0.0
+Kumo,classifier,standard,0.34,0.0
+Kumo,classifier,standard,0.35,0.0
+Kumo,classifier,standard,0.36,0.0
+Kumo,classifier,standard,0.37,0.0
+Kumo,classifier,standard,0.38,0.0
+Kumo,classifier,standard,0.39,0.0
+Kumo,classifier,standard,0.4,0.0
+Kumo,classifier,standard,0.41,0.0
+Kumo,classifier,standard,0.42,0.0
+Kumo,classifier,standard,0.43,0.0
+Kumo,classifier,standard,0.44,0.0
+Kumo,classifier,standard,0.45,0.0
+Kumo,classifier,standard,0.46,0.0
+Kumo,classifier,standard,0.47,0.0
+Kumo,classifier,standard,0.48,0.0
+Kumo,classifier,standard,0.49,0.0
+Kumo,classifier,standard,0.5,0.0
+Kumo,classifier,lead,0.01,0.8478233025338483
+Kumo,classifier,lead,0.02,0.7850459914395084
+Kumo,classifier,lead,0.03,0.7209743028415163
+Kumo,classifier,lead,0.04,0.6555677874442946
+Kumo,classifier,lead,0.05,0.5887842928240896
+Kumo,classifier,lead,0.06,0.5205798728370529
+Kumo,classifier,lead,0.07,0.45090869118267884
+Kumo,classifier,lead,0.08,0.379722918677904
+Kumo,classifier,lead,0.09,0.3319920791467986
+Kumo,classifier,lead,0.1,0.29123643709817876
+Kumo,classifier,lead,0.11,0.24956493795933044
+Kumo,classifier,lead,0.12,0.20694635933063857
+Kumo,classifier,lead,0.13,0.16334804329991706
+Kumo,classifier,lead,0.14,0.11873581298237978
+Kumo,classifier,lead,0.15,0.07307388316931342
+Kumo,classifier,lead,0.16,0.026324764594515014
+Kumo,classifier,lead,0.17,0.0
+Kumo,classifier,lead,0.18,0.0
+Kumo,classifier,lead,0.19,0.0
+Kumo,classifier,lead,0.2,0.0
+Kumo,classifier,lead,0.21,0.0
+Kumo,classifier,lead,0.22,0.0
+Kumo,classifier,lead,0.23,0.0
+Kumo,classifier,lead,0.24,0.0
+Kumo,classifier,lead,0.25,0.0
+Kumo,classifier,lead,0.26,0.0
+Kumo,classifier,lead,0.27,0.0
+Kumo,classifier,lead,0.28,0.0
+Kumo,classifier,lead,0.29,0.0
+Kumo,classifier,lead,0.3,0.0
+Kumo,classifier,lead,0.31,0.0
+Kumo,classifier,lead,0.32,0.0
+Kumo,classifier,lead,0.33,0.0
+Kumo,classifier,lead,0.34,0.0
+Kumo,classifier,lead,0.35,0.0
+Kumo,classifier,lead,0.36,0.0
+Kumo,classifier,lead,0.37,0.0
+Kumo,classifier,lead,0.38,0.0
+Kumo,classifier,lead,0.39,0.0
+Kumo,classifier,lead,0.4,0.0
+Kumo,classifier,lead,0.41,0.0
+Kumo,classifier,lead,0.42,0.0
+Kumo,classifier,lead,0.43,0.0
+Kumo,classifier,lead,0.44,0.0
+Kumo,classifier,lead,0.45,0.0
+Kumo,classifier,lead,0.46,0.0
+Kumo,classifier,lead,0.47,0.0
+Kumo,classifier,lead,0.48,0.0
+Kumo,classifier,lead,0.49,0.0
+Kumo,classifier,lead,0.5,0.0
+|d| now,naive,standard,0.01,0.5797979797979798
+|d| now,naive,standard,0.02,0.5591836734693878
+|d| now,naive,standard,0.03,0.5381443298969072
+|d| now,naive,standard,0.04,0.5166666666666667
+|d| now,naive,standard,0.05,0.4947368421052632
+|d| now,naive,standard,0.06,0.4723404255319149
+|d| now,naive,standard,0.07,0.44946236559139785
+|d| now,naive,standard,0.08,0.42608695652173906
+|d| now,naive,standard,0.09,0.4021978021978022
+|d| now,naive,standard,0.1,0.37777777777777777
+|d| now,naive,standard,0.11,0.35280898876404493
+|d| now,naive,standard,0.12,0.3272727272727272
+|d| now,naive,standard,0.13,0.30114942528735633
+|d| now,naive,standard,0.14,0.27441860465116275
+|d| now,naive,standard,0.15,0.24705882352941178
+|d| now,naive,standard,0.16,0.21904761904761902
+|d| now,naive,standard,0.17,0.19036144578313258
+|d| now,naive,standard,0.18,0.16097560975609757
+|d| now,naive,standard,0.19,0.13086419753086412
+|d| now,naive,standard,0.2,0.09999999999999998
+|d| now,naive,standard,0.21,0.06835443037974684
+|d| now,naive,standard,0.22,0.03589743589743593
+|d| now,naive,standard,0.23,0.002597402597402542
+|d| now,naive,standard,0.24,0.0
+|d| now,naive,standard,0.25,0.0
+|d| now,naive,standard,0.26,0.0
+|d| now,naive,standard,0.27,0.0
+|d| now,naive,standard,0.28,0.0
+|d| now,naive,standard,0.29,0.0
+|d| now,naive,standard,0.3,0.0
+|d| now,naive,standard,0.31,0.0
+|d| now,naive,standard,0.32,0.0
+|d| now,naive,standard,0.33,0.0
+|d| now,naive,standard,0.34,0.0
+|d| now,naive,standard,0.35,0.0
+|d| now,naive,standard,0.36,0.0
+|d| now,naive,standard,0.37,0.0
+|d| now,naive,standard,0.38,0.0
+|d| now,naive,standard,0.39,0.0
+|d| now,naive,standard,0.4,0.0
+|d| now,naive,standard,0.41,0.0
+|d| now,naive,standard,0.42,0.0
+|d| now,naive,standard,0.43,0.0
+|d| now,naive,standard,0.44,0.0
+|d| now,naive,standard,0.45,0.0
+|d| now,naive,standard,0.46,0.0
+|d| now,naive,standard,0.47,0.0
+|d| now,naive,standard,0.48,0.0
+|d| now,naive,standard,0.49,0.0
+|d| now,naive,standard,0.5,0.0
+|d| now,naive,lead,0.01,0.49160193380173506
+|d| now,naive,lead,0.02,0.42840964011278765
+|d| now,naive,lead,0.03,0.3647849994238293
+|d| now,naive,lead,0.04,0.2998348454334211
+|d| now,naive,lead,0.05,0.2436456522524383
+|d| now,naive,lead,0.06,0.2185780537013286
+|d| now,naive,lead,0.07,0.1929713670287459
+|d| now,naive,lead,0.08,0.1668080132748472
+|d| now,naive,lead,0.09,0.14006964077828649
+|d| now,naive,lead,0.1,0.11273708224835484
+|d| now,naive,lead,0.11,0.08479030894310789
+|d| now,naive,lead,0.12,0.05620838172327496
+|d| now,naive,lead,0.13,0.026969398730575373
+|d| now,naive,lead,0.14,0.0
+|d| now,naive,lead,0.15,0.0
+|d| now,naive,lead,0.16,0.0
+|d| now,naive,lead,0.17,0.0
+|d| now,naive,lead,0.18,0.0
+|d| now,naive,lead,0.19,0.0
+|d| now,naive,lead,0.2,0.0
+|d| now,naive,lead,0.21,0.0
+|d| now,naive,lead,0.22,0.0
+|d| now,naive,lead,0.23,0.0
+|d| now,naive,lead,0.24,0.0
+|d| now,naive,lead,0.25,0.0
+|d| now,naive,lead,0.26,0.0
+|d| now,naive,lead,0.27,0.0
+|d| now,naive,lead,0.28,0.0
+|d| now,naive,lead,0.29,0.0
+|d| now,naive,lead,0.3,0.0
+|d| now,naive,lead,0.31,0.0
+|d| now,naive,lead,0.32,0.0
+|d| now,naive,lead,0.33,0.0
+|d| now,naive,lead,0.34,0.0
+|d| now,naive,lead,0.35,0.0
+|d| now,naive,lead,0.36,0.0
+|d| now,naive,lead,0.37,0.0
+|d| now,naive,lead,0.38,0.0
+|d| now,naive,lead,0.39,0.0
+|d| now,naive,lead,0.4,0.0
+|d| now,naive,lead,0.41,0.0
+|d| now,naive,lead,0.42,0.0
+|d| now,naive,lead,0.43,0.0
+|d| now,naive,lead,0.44,0.0
+|d| now,naive,lead,0.45,0.0
+|d| now,naive,lead,0.46,0.0
+|d| now,naive,lead,0.47,0.0
+|d| now,naive,lead,0.48,0.0
+|d| now,naive,lead,0.49,0.0
+|d| now,naive,lead,0.5,0.0
