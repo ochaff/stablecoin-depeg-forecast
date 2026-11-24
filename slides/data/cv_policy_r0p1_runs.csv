@@ -1,0 +1,30 @@
+model,run,D,N,A,F,H,family,median_lead
+ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,2,18,21,19,8688,classifier,18.5
+ANGEL exceedance,fc_full_seed1233_ANGEL_fc_exceedance_alpha_0.1,12,18,48,36,8688,forecast,13.5
+ANGEL exceedance,fc_full_seed42_ANGEL_fc_exceedance_alpha_0.1,11,18,48,37,8688,forecast,8.0
+ANGEL exceedance,fc_full_seed7_ANGEL_fc_exceedance_alpha_0.1,11,18,47,36,8688,forecast,15.0
+ARIMA,bench_arima_seed1_ARIMA_fc_exceedance_alpha_0.1,14,18,44,30,8688,forecast,10.5
+CatBoost,full_seed1233_catboost_alpha_0.1,3,18,12,9,8688,classifier,13.0
+CatBoost,full_seed42_catboost_alpha_0.1,1,18,14,13,8688,classifier,9.0
+CatBoost,full_seed7_catboost_alpha_0.1,2,18,12,10,8688,classifier,14.0
+GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,8,18,36,28,8688,forecast,9.5
+Kumo,all_seed1233_kumo_tabular_alpha_1.0,9,18,42,33,8688,classifier,4.0
+Kumo,lead6_24_threshold_15_alpha_1.0_seed42_kumo_tabular_alpha_1.0,13,18,55,42,8688,classifier,5.0
+Kumo,lead6_24_threshold_15_alpha_1.0_seed7_kumo_tabular_alpha_1.0,11,18,53,42,8688,classifier,5.0
+LightGBM,full_seed1233_lightgbm_alpha_0.1,1,18,6,5,8688,classifier,19.0
+LightGBM,full_seed42_lightgbm_alpha_0.1,3,18,10,7,8688,classifier,13.0
+LightGBM,full_seed7_lightgbm_alpha_0.1,1,18,6,5,8688,classifier,19.0
+Random forest,full_seed1233_random_forest_alpha_0.1,2,18,13,11,8688,classifier,13.0
+Random forest,full_seed42_random_forest_alpha_0.1,2,18,24,22,8688,classifier,14.5
+Random forest,full_seed7_random_forest_alpha_0.1,3,18,19,16,8688,classifier,13.0
+TabICL,full_seed1233_tabicl_v2_alpha_0.1,3,18,32,29,8688,classifier,9.0
+TabICL,full_seed42_tabicl_v2_alpha_0.1,5,18,32,27,8688,classifier,7.0
+TabICL,full_seed7_tabicl_v2_alpha_0.1,5,18,34,29,8688,classifier,11.0
+TiDE classifier,full_seed1233_TiDE_alpha_0.1,2,18,22,20,8688,classifier,9.0
+TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,5,18,47,42,8688,forecast,19.0
+TimeXer classifier,full_seed1233_TimeXer_alpha_0.1,2,18,22,20,8688,classifier,5.5
+TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,9,18,60,50,8688,forecast,13.0
+XGBoost,full_seed1233_xgboost_alpha_0.1,3,18,12,9,8688,classifier,13.0
+XGBoost,full_seed42_xgboost_alpha_0.1,1,18,3,2,8688,classifier,12.0
+XGBoost,full_seed7_xgboost_alpha_0.1,5,18,27,22,8688,classifier,13.0
+iTransformer classifier,full_seed1233_iTransformer_alpha_0.1,2,18,22,20,8688,classifier,14.5

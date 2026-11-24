@@ -237,5 +237,69 @@ def run_holdout():
                                    "V_0p1"]].mean().round(2).to_string())
 
 
+# ------------------------------------------------------------------------------- deployable policy for r = 0.1
+R_POLICY = 0.1
+VAL_GRID = np.linspace(0.5, 0.9995, 120)            # candidate cutoffs = validation-score quantiles
+
+
+def _policy_job(job):
+    """CV, one run: per fold pick the cutoff maximising D - r A on the validation block, apply it to the test block."""
+    name, run = job
+    ew, _, ctx_cv, events = setup()
+    s = pd.read_parquet(run / "artifacts/cv/operational_scores.parquet")
+    s["timestamp"] = pd.to_datetime(s.timestamp, utc=True)
+    out = []
+    for k, g in s.groupby("fold"):
+        val = g[g.split.eq("validation")].sort_values("timestamp").reset_index(drop=True)
+        test = g[g.split.eq("test")].sort_values("timestamp").reset_index(drop=True)
+        vctx = ctx_cv[ctx_cv.timestamp <= val.timestamp.iloc[-1]]
+        vs = val.probability.to_numpy(float)
+        cands = np.unique(np.quantile(vs[np.isfinite(vs)], VAL_GRID))
+        vt = [T.tally(val, vs, c, events, vctx, ew) for c in cands]
+        gain = [t["D"] - R_POLICY * t["A"] for t in vt]
+        j = int(np.argmax(gain)) if max(gain) > 0 else None             # never alert if nothing pays on validation
+        cut = cands[j] if j is not None else np.inf
+        t = T.tally(test, test.probability.to_numpy(float), cut, events, ctx_cv, ew)
+        out.append(dict(model=name, run=run.name, fold=k, cutoff=cut, val_events=vt[0]["N"],
+                        D=t["D"], N=t["N"], A=t["A"], F=t["F"], H=t["H"], leads=t["leads"]))
+    return out
+
+
+def run_policy():
+    jobs = [(m, d) for m, (_, dirs) in CV_MODELS.items() for d in dirs]
+    with Pool(6) as p:
+        folds = pd.DataFrame([r for rows in p.map(_policy_job, jobs) for r in rows])
+    folds.drop(columns="leads").to_csv(DATA / "cv_policy_r0p1_folds.csv", index=False)
+    per_run = folds.groupby(["model", "run"]).agg(D=("D", "sum"), N=("N", "sum"), A=("A", "sum"), F=("F", "sum"),
+                                                  H=("H", "sum"), leads=("leads", "sum")).reset_index()
+    per_run["family"] = per_run.model.map({m: f for m, (f, _) in CV_MODELS.items()})
+    per_run["median_lead"] = per_run.leads.map(lambda x: np.median(x) if len(x) else np.nan)
+    per_run.drop(columns="leads").to_csv(DATA / "cv_policy_r0p1_runs.csv", index=False)
+
+    # holdout: no validation scores exist for the paper-split forecasts, so use the decision rule itself:
+    # act when the forecast probability of a breach is >= r (Bayes rule for a calibrated probability)
+    ew, context, _, events = setup()
+    h, series = holdout_scores(context)
+    frame = pd.DataFrame({"timestamp": h.index,
+                          "depeg_bps": context.set_index("timestamp").depeg_bps.reindex(h.index).to_numpy()})
+    rows = []
+    for m, (fam, cs) in series.items():
+        if m == "|d| now":
+            continue
+        # Kumo's raw probabilities are not on the P >= r scale (P >= 0.1 alerts almost always): use the cutoff
+        # Quantlet 8 selected on its own validation data for the holdout (its deployed policy)
+        cut = R_POLICY
+        if m == "Kumo":
+            q8 = pd.read_csv(Q8 / "artifacts/kumo_context_design_holdout/holdout_metrics.csv").set_index("context")
+            cut = q8.loc["Native full context", "alert_threshold"]
+        for c in cs:
+            t = T.tally(frame, h[c].to_numpy(float), cut, events, context, ew)
+            rows.append(dict(model=m, family=fam, column=c, cutoff=cut, D=t["D"], N=t["N"], A=t["A"], F=t["F"], H=t["H"],
+                             median_lead=np.median(t["leads"]) if t["leads"] else np.nan))
+    pd.DataFrame(rows).to_csv(DATA / "holdout_policy_r0p1.csv", index=False)
+    print(per_run.groupby("model")[["D", "N", "A", "F"]].mean().round(1).to_string())
+    print(pd.DataFrame(rows).groupby("model")[["D", "N", "A", "F"]].mean().round(1).to_string())
+
+
 if __name__ == "__main__":
-    {"cv": run_cv, "holdout": run_holdout}[sys.argv[1]]()
+    {"cv": run_cv, "holdout": run_holdout, "policy": run_policy}[sys.argv[1]]()

@@ -1,0 +1,117 @@
+model,run,fold,cutoff,val_events,D,N,A,F,H
+ANGEL exceedance,fc_full_seed1233_ANGEL_fc_exceedance_alpha_0.1,1,0.04320684085482681,6,3,4,10,7,1545
+ANGEL exceedance,fc_full_seed1233_ANGEL_fc_exceedance_alpha_0.1,2,0.02883392158203799,7,3,4,14,11,2778
+ANGEL exceedance,fc_full_seed1233_ANGEL_fc_exceedance_alpha_0.1,3,0.020339512984586503,8,3,5,12,9,3424
+ANGEL exceedance,fc_full_seed1233_ANGEL_fc_exceedance_alpha_0.1,4,0.07593830774858425,12,3,5,12,9,941
+ANGEL exceedance,fc_full_seed42_ANGEL_fc_exceedance_alpha_0.1,1,0.010797544832994513,6,3,4,14,11,1545
+ANGEL exceedance,fc_full_seed42_ANGEL_fc_exceedance_alpha_0.1,2,0.02436603951210313,7,3,4,11,8,2778
+ANGEL exceedance,fc_full_seed42_ANGEL_fc_exceedance_alpha_0.1,3,0.016878510937287462,8,2,5,12,10,3424
+ANGEL exceedance,fc_full_seed42_ANGEL_fc_exceedance_alpha_0.1,4,0.03279956555796286,12,3,5,11,8,941
+ANGEL exceedance,fc_full_seed7_ANGEL_fc_exceedance_alpha_0.1,1,0.010480449179016403,6,3,4,16,13,1545
+ANGEL exceedance,fc_full_seed7_ANGEL_fc_exceedance_alpha_0.1,2,0.09825602418153152,7,3,4,9,6,2778
+ANGEL exceedance,fc_full_seed7_ANGEL_fc_exceedance_alpha_0.1,3,0.01775875759921209,8,3,5,11,8,3424
+ANGEL exceedance,fc_full_seed7_ANGEL_fc_exceedance_alpha_0.1,4,0.03988093175014666,12,2,5,11,9,941
+ARIMA,bench_arima_seed1_ARIMA_fc_exceedance_alpha_0.1,1,0.7783117709195456,6,4,4,9,5,1545
+ARIMA,bench_arima_seed1_ARIMA_fc_exceedance_alpha_0.1,2,0.7696766885836083,7,4,4,13,9,2778
+ARIMA,bench_arima_seed1_ARIMA_fc_exceedance_alpha_0.1,3,0.7548103715965675,8,3,5,12,9,3424
+ARIMA,bench_arima_seed1_ARIMA_fc_exceedance_alpha_0.1,4,0.7387908203382563,12,3,5,10,7,941
+GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,1,0.23076375429986332,6,2,4,8,6,1545
+GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,2,0.17950125273131223,7,2,4,11,9,2778
+GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,3,0.15506293715802458,8,2,5,10,8,3424
+GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,4,0.059548502913938754,12,2,5,7,5,941
+TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,1,0.04505442385685563,6,2,4,18,16,1545
+TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,2,0.36195068018303894,7,0,4,4,4,2778
+TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,3,0.034633302576781204,8,1,5,15,14,3424
+TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,4,0.03663316562846767,12,2,5,10,8,941
+TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,1,0.8545042913264823,6,3,4,4,1,1545
+TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,2,0.1982093343780889,7,2,4,35,32,2778
+TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,3,0.5505581094383852,8,1,5,7,6,3424
+TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,4,0.30552588622196203,12,3,5,14,11,941
+ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,1,0.7224205070210603,6,1,4,7,6,1545
+ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,2,0.9186166100416865,7,0,4,4,4,2778
+ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,3,0.9731211141177586,8,0,5,2,2,3424
+ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,4,0.7208110126727776,12,1,5,8,7,941
+TiDE classifier,full_seed1233_TiDE_alpha_0.1,1,0.9502718910224298,6,0,4,4,4,1545
+TiDE classifier,full_seed1233_TiDE_alpha_0.1,2,inf,7,0,4,0,0,2778
+TiDE classifier,full_seed1233_TiDE_alpha_0.1,3,0.020009611609258966,8,0,5,9,9,3424
+TiDE classifier,full_seed1233_TiDE_alpha_0.1,4,0.009317392198028466,12,2,5,9,7,941
+TimeXer classifier,full_seed1233_TimeXer_alpha_0.1,1,0.7595112591831624,6,1,4,7,6,1545
+TimeXer classifier,full_seed1233_TimeXer_alpha_0.1,2,0.7130743789232078,7,1,4,9,8,2778
+TimeXer classifier,full_seed1233_TimeXer_alpha_0.1,3,0.9863428143603467,8,0,5,1,1,3424
+TimeXer classifier,full_seed1233_TimeXer_alpha_0.1,4,0.020536703255442327,12,0,5,5,5,941
+iTransformer classifier,full_seed1233_iTransformer_alpha_0.1,1,0.8905641510005758,6,0,4,3,3,1545
+iTransformer classifier,full_seed1233_iTransformer_alpha_0.1,2,0.8196393946459313,7,2,4,16,14,2778
+iTransformer classifier,full_seed1233_iTransformer_alpha_0.1,3,0.9507346403939384,8,0,5,0,0,3424
+iTransformer classifier,full_seed1233_iTransformer_alpha_0.1,4,0.9741734907031064,12,0,5,3,3,941
+Kumo,all_seed1233_kumo_tabular_alpha_1.0,1,0.2557751563311625,6,1,4,7,6,1545
+Kumo,all_seed1233_kumo_tabular_alpha_1.0,2,0.33077573474214883,7,2,4,9,7,2778
+Kumo,all_seed1233_kumo_tabular_alpha_1.0,3,0.25972946579115724,8,4,5,19,15,3424
+Kumo,all_seed1233_kumo_tabular_alpha_1.0,4,0.1520421907817867,12,2,5,7,5,941
+Kumo,lead6_24_threshold_15_alpha_1.0_seed7_kumo_tabular_alpha_1.0,1,0.2154377140312636,6,2,4,16,14,1545
+Kumo,lead6_24_threshold_15_alpha_1.0_seed7_kumo_tabular_alpha_1.0,2,0.2570447723928119,7,3,4,7,4,2778
+Kumo,lead6_24_threshold_15_alpha_1.0_seed7_kumo_tabular_alpha_1.0,3,0.24480222165584564,8,4,5,20,16,3424
+Kumo,lead6_24_threshold_15_alpha_1.0_seed7_kumo_tabular_alpha_1.0,4,0.13175508709414666,12,2,5,10,8,941
+Kumo,lead6_24_threshold_15_alpha_1.0_seed42_kumo_tabular_alpha_1.0,1,0.2626166335441986,6,1,4,7,6,1545
+Kumo,lead6_24_threshold_15_alpha_1.0_seed42_kumo_tabular_alpha_1.0,2,0.260264543567385,7,4,4,10,6,2778
+Kumo,lead6_24_threshold_15_alpha_1.0_seed42_kumo_tabular_alpha_1.0,3,0.2539019642472267,8,4,5,26,22,3424
+Kumo,lead6_24_threshold_15_alpha_1.0_seed42_kumo_tabular_alpha_1.0,4,0.1646845332534374,12,4,5,12,8,941
+TabICL,full_seed1233_tabicl_v2_alpha_0.1,1,0.14942796528339386,6,1,4,11,10,1545
+TabICL,full_seed1233_tabicl_v2_alpha_0.1,2,0.37245636444757974,7,1,4,7,6,2778
+TabICL,full_seed1233_tabicl_v2_alpha_0.1,3,0.268638091989926,8,0,5,6,6,3424
+TabICL,full_seed1233_tabicl_v2_alpha_0.1,4,0.14025773108005524,12,1,5,8,7,941
+TabICL,full_seed42_tabicl_v2_alpha_0.1,1,0.16090957820415497,6,0,4,15,15,1545
+TabICL,full_seed42_tabicl_v2_alpha_0.1,2,0.39939772567278486,7,0,4,1,1,2778
+TabICL,full_seed42_tabicl_v2_alpha_0.1,3,0.26363308778830946,8,1,5,5,4,3424
+TabICL,full_seed42_tabicl_v2_alpha_0.1,4,0.11293664867499796,12,4,5,11,7,941
+TabICL,full_seed7_tabicl_v2_alpha_0.1,1,inf,6,0,4,0,0,1545
+TabICL,full_seed7_tabicl_v2_alpha_0.1,2,0.3994965268904426,7,1,4,1,0,2778
+TabICL,full_seed7_tabicl_v2_alpha_0.1,3,0.22353490698337558,8,1,5,22,21,3424
+TabICL,full_seed7_tabicl_v2_alpha_0.1,4,0.12489950153344322,12,3,5,11,8,941
+CatBoost,full_seed1233_catboost_alpha_0.1,1,0.46112071213750966,6,2,4,6,4,1545
+CatBoost,full_seed1233_catboost_alpha_0.1,2,0.534561737857038,7,0,4,5,5,2778
+CatBoost,full_seed1233_catboost_alpha_0.1,3,0.5650802361877943,8,0,5,0,0,3424
+CatBoost,full_seed1233_catboost_alpha_0.1,4,0.5499906572610357,12,1,5,1,0,941
+CatBoost,full_seed42_catboost_alpha_0.1,1,0.5624876587002393,6,0,4,2,2,1545
+CatBoost,full_seed42_catboost_alpha_0.1,2,0.41940411940019084,7,1,4,6,5,2778
+CatBoost,full_seed42_catboost_alpha_0.1,3,0.5125783502986689,8,0,5,4,4,3424
+CatBoost,full_seed42_catboost_alpha_0.1,4,0.500424944064196,12,0,5,2,2,941
+CatBoost,full_seed7_catboost_alpha_0.1,1,inf,6,0,4,0,0,1545
+CatBoost,full_seed7_catboost_alpha_0.1,2,0.5424544225941955,7,1,4,6,5,2778
+CatBoost,full_seed7_catboost_alpha_0.1,3,0.5211613881535991,8,0,5,0,0,3424
+CatBoost,full_seed7_catboost_alpha_0.1,4,0.5004780780678327,12,1,5,6,5,941
+LightGBM,full_seed1233_lightgbm_alpha_0.1,1,0.30506125476281626,6,0,4,0,0,1545
+LightGBM,full_seed1233_lightgbm_alpha_0.1,2,inf,7,0,4,0,0,2778
+LightGBM,full_seed1233_lightgbm_alpha_0.1,3,inf,8,0,5,0,0,3424
+LightGBM,full_seed1233_lightgbm_alpha_0.1,4,0.027616497397429038,12,1,5,6,5,941
+LightGBM,full_seed42_lightgbm_alpha_0.1,1,0.023544340776486615,6,2,4,4,2,1545
+LightGBM,full_seed42_lightgbm_alpha_0.1,2,inf,7,0,4,0,0,2778
+LightGBM,full_seed42_lightgbm_alpha_0.1,3,0.046012304525013245,8,0,5,1,1,3424
+LightGBM,full_seed42_lightgbm_alpha_0.1,4,0.024084591014234814,12,1,5,5,4,941
+LightGBM,full_seed7_lightgbm_alpha_0.1,1,inf,6,0,4,0,0,1545
+LightGBM,full_seed7_lightgbm_alpha_0.1,2,0.0986034697354762,7,0,4,1,1,2778
+LightGBM,full_seed7_lightgbm_alpha_0.1,3,0.1553679640111895,8,0,5,0,0,3424
+LightGBM,full_seed7_lightgbm_alpha_0.1,4,0.02364791466387679,12,1,5,5,4,941
+XGBoost,full_seed1233_xgboost_alpha_0.1,1,0.5047658423781428,6,1,4,4,3,1545
+XGBoost,full_seed1233_xgboost_alpha_0.1,2,0.5001934823045711,7,1,4,5,4,2778
+XGBoost,full_seed1233_xgboost_alpha_0.1,3,0.5001918077468872,8,0,5,0,0,3424
+XGBoost,full_seed1233_xgboost_alpha_0.1,4,0.49506038427352905,12,1,5,3,2,941
+XGBoost,full_seed42_xgboost_alpha_0.1,1,0.4999786615371704,6,1,4,1,0,1545
+XGBoost,full_seed42_xgboost_alpha_0.1,2,0.524553120136261,7,0,4,2,2,2778
+XGBoost,full_seed42_xgboost_alpha_0.1,3,inf,8,0,5,0,0,3424
+XGBoost,full_seed42_xgboost_alpha_0.1,4,0.49970072507858276,12,0,5,0,0,941
+XGBoost,full_seed7_xgboost_alpha_0.1,1,0.4950089752674103,6,2,4,4,2,1545
+XGBoost,full_seed7_xgboost_alpha_0.1,2,0.31913893929324283,7,1,4,6,5,2778
+XGBoost,full_seed7_xgboost_alpha_0.1,3,0.2652442876526317,8,1,5,9,8,3424
+XGBoost,full_seed7_xgboost_alpha_0.1,4,0.46249884366989136,12,1,5,8,7,941
+Random forest,full_seed1233_random_forest_alpha_0.1,1,inf,6,0,4,0,0,1545
+Random forest,full_seed1233_random_forest_alpha_0.1,2,0.5209989100105431,7,1,4,7,6,2778
+Random forest,full_seed1233_random_forest_alpha_0.1,3,0.5064896162051606,8,0,5,0,0,3424
+Random forest,full_seed1233_random_forest_alpha_0.1,4,0.26852772895721916,12,1,5,6,5,941
+Random forest,full_seed42_random_forest_alpha_0.1,1,0.2748335225814218,6,1,4,18,17,1545
+Random forest,full_seed42_random_forest_alpha_0.1,2,0.5013070394437723,7,0,4,2,2,2778
+Random forest,full_seed42_random_forest_alpha_0.1,3,0.47434870715630967,8,0,5,0,0,3424
+Random forest,full_seed42_random_forest_alpha_0.1,4,0.26829317284540166,12,1,5,4,3,941
+Random forest,full_seed7_random_forest_alpha_0.1,1,0.24302691573420085,6,2,4,14,12,1545
+Random forest,full_seed7_random_forest_alpha_0.1,2,0.47156162565938237,7,0,4,3,3,2778
+Random forest,full_seed7_random_forest_alpha_0.1,3,0.5005347626126665,8,0,5,0,0,3424
+Random forest,full_seed7_random_forest_alpha_0.1,4,0.38390097525637373,12,1,5,2,1,941
