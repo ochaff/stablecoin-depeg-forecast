@@ -38,7 +38,7 @@ POOL = REPO / "lightning_logs/earlywarning_pool_15bps_2026-11-19"
 TREES_HO = REPO / "lightning_logs/earlywarning_trees_holdout_2026-11-23"
 
 CV_KEEP = ["ANGEL exceedance", "ARIMA", "GARCH-t", "TiDE forecast", "TimeXer forecast", "Kumo", "TabICL",
-           "Random forest", "CatBoost", "ANGEL classifier"]
+           "Random forest", "CatBoost", "XGBoost", "LightGBM", "ANGEL classifier"]
 CV_RUNS = {m: CV_MODELS[m] for m in CV_KEEP}
 CV_RUNS["|d| now"] = ("naive", [POOL / "baseline_naive_abs_depeg_alpha_0.1"])
 PROB = lambda m: m != "|d| now"
@@ -129,7 +129,8 @@ def holdout_series():
     ew, context, _, _ = setup()
     h, series = holdout_scores(context)
     out = {m: (fam, [h[c] for c in cs]) for m, (fam, cs) in series.items()}
-    for m, tag in (("Random forest", "random_forest"), ("CatBoost", "catboost")):
+    for m, tag in (("Random forest", "random_forest"), ("CatBoost", "catboost"), ("XGBoost", "xgboost"),
+                   ("LightGBM", "lightgbm"), ("TabICL", "tabicl_v2")):
         cols = []
         for d in sorted(TREES_HO.glob(f"holdout*_seed*_{tag}_alpha_0.1")):
             s = pd.read_parquet(d / "artifacts/cv/operational_scores.parquet")

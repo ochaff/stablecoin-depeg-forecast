@@ -43,8 +43,8 @@ CV_MODELS = {
     "ANGEL exceedance": ("forecast", sorted(POOL.glob("fc_full_seed*_ANGEL_fc_exceedance_alpha_0.1"))),
     "ARIMA": ("forecast", [POOL / "bench_arima_seed1_ARIMA_fc_exceedance_alpha_0.1"]),
     "GARCH-t": ("forecast", [POOL / "bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1"]),
-    "TiDE forecast": ("forecast", [POOL / "bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1"]),
-    "TimeXer forecast": ("forecast", [POOL / "bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1"]),
+    "TiDE forecast": ("forecast", sorted(d for d in POOL.glob("bench_tide_nf_seed*_TiDE_NF_fc_exceedance_alpha_0.1") if (d / "artifacts/cv/operational_scores.parquet").exists())),
+    "TimeXer forecast": ("forecast", sorted(d for d in POOL.glob("bench_timexer_nf_seed*_TimeXer_NF_fc_exceedance_alpha_0.1") if (d / "artifacts/cv/operational_scores.parquet").exists())),
     "ANGEL classifier": ("classifier", [POOL / "full_seed1233_ANGEL_alpha_0.1"]),
     "TiDE classifier": ("classifier", [POOL / "full_seed1233_TiDE_alpha_0.1"]),
     "TimeXer classifier": ("classifier", [POOL / "full_seed1233_TimeXer_alpha_0.1"]),
@@ -110,6 +110,29 @@ def run_cv():
 
 
 # ------------------------------------------------------------------------------------------------------- holdout
+EXTRA_SEEDS = {"TiDE (NF)": "tide_hist_exog", "TimeXer (NF)": "timeXer_hist_exog"}
+
+
+def extra_seed_scores(times):
+    """Exceedance scores of the extra TiDE / TimeXer holdout seeds (benchmark_outputs/<folder>_seed<s>/), cached."""
+    from holdout_exceedance_eval import exceedance
+    cache = REPO / "lightning_logs/holdout_exceedance_eval/extra_seed_scores.parquet"
+    out = pd.read_parquet(cache) if cache.exists() else pd.DataFrame(index=times)
+    new = False
+    for label, folder in EXTRA_SEEDS.items():
+        for f in sorted((REPO / "benchmark_outputs").glob(f"{folder}_seed*/preds_test_set.pkl")):
+            col = f"{label} {f.parent.name.split('_')[-1]}"
+            if col in out:
+                continue
+            A = pickle.load(open(f, "rb"))
+            t = pd.DatetimeIndex(pd.to_datetime(A["meta"]["cutoff"]).dt.tz_localize("UTC"))
+            out[col] = pd.Series(exceedance(A["Q"], np.asarray(A["u_grid"]), THRESHOLD, MIN_LEAD, MAX_LEAD), t).reindex(out.index)
+            new = True
+    if new:
+        out.to_parquet(cache)
+    return out
+
+
 def holdout_scores(context):
     h = pd.read_parquet(REPO / "lightning_logs/holdout_exceedance_eval/scores.parquet")
     k = pd.read_parquet(Q8 / "artifacts/kumo_context_design_holdout/holdout_predictions.parquet")
@@ -118,12 +141,22 @@ def holdout_scores(context):
     times = h.index.intersection(k.index)
     h = h.loc[times].copy()
     h["Kumo"] = k["Native full context"].reindex(times)             # the CV specification (all fitting rows)
+    kumo = ["Kumo"]
+    for f in sorted((Q8 / "artifacts/kumo_context_design_holdout").glob("holdout_predictions_native_seed*.parquet")):
+        ks = pd.read_parquet(f)                                      # extra seeds (kumo_native_holdout_seeds.py)
+        col = "Kumo " + f.stem.split("_")[-1]
+        h[col] = pd.Series(ks.probability.to_numpy(float), pd.to_datetime(ks.timestamp, utc=True)).reindex(times)
+        kumo.append(col)
+    extra = extra_seed_scores(times)                                 # extra TiDE / TimeXer holdout seeds
+    for c in extra:
+        h[c] = extra[c].reindex(times)
     absd = np.abs(context.set_index("timestamp").depeg_bps.reindex(times).to_numpy())
     h["|d| now"] = absd / (1 + absd)
     series = {"ANGEL exceedance": ("forecast", [c for c in h if c.startswith("ANGEL_full_seed_")]),
               "ARIMA": ("forecast", ["ARIMA"]), "GARCH-t": ("forecast", ["GARCH-t"]),
-              "TiDE forecast": ("forecast", ["TiDE (NF)"]), "TimeXer forecast": ("forecast", ["TimeXer (NF)"]),
-              "Kumo": ("classifier", ["Kumo"]), "|d| now": ("naive", ["|d| now"])}
+              "TiDE forecast": ("forecast", ["TiDE (NF)"] + [c for c in extra if c.startswith("TiDE")]),
+              "TimeXer forecast": ("forecast", ["TimeXer (NF)"] + [c for c in extra if c.startswith("TimeXer")]),
+              "Kumo": ("classifier", kumo), "|d| now": ("naive", ["|d| now"])}
     return h, series
 
 
