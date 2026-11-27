@@ -19,14 +19,30 @@ GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,1,0.2307637542998633
 GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,2,0.17950125273131223,7,2,4,11,9,2778
 GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,3,0.15506293715802458,8,2,5,10,8,3424
 GARCH-t,bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1,4,0.059548502913938754,12,2,5,7,5,941
-TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,1,0.04505442385685563,6,2,4,18,16,1545
-TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,2,0.36195068018303894,7,0,4,4,4,2778
-TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,3,0.034633302576781204,8,1,5,15,14,3424
-TiDE forecast,bench_tide_nf_seed1233_TiDE_NF_fc_exceedance_alpha_0.1,4,0.03663316562846767,12,2,5,10,8,941
-TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,1,0.8545042913264823,6,3,4,4,1,1545
-TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,2,0.1982093343780889,7,2,4,35,32,2778
-TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,3,0.5505581094383852,8,1,5,7,6,3424
-TimeXer forecast,bench_timexer_nf_seed1_TimeXer_NF_fc_exceedance_alpha_0.1,4,0.30552588622196203,12,3,5,14,11,941
+TiDE forecast,bench_tide_sg_seed1_TiDE_SG_fc_exceedance_alpha_0.1,1,0.0447412445534147,6,2,4,13,11,1545
+TiDE forecast,bench_tide_sg_seed1_TiDE_SG_fc_exceedance_alpha_0.1,2,0.04832730542618841,7,1,4,16,15,2778
+TiDE forecast,bench_tide_sg_seed1_TiDE_SG_fc_exceedance_alpha_0.1,3,0.2138781196759119,8,2,5,12,10,3424
+TiDE forecast,bench_tide_sg_seed1_TiDE_SG_fc_exceedance_alpha_0.1,4,0.11227532108413135,12,0,5,10,10,941
+TiDE forecast,bench_tide_sg_seed42_TiDE_SG_fc_exceedance_alpha_0.1,1,0.046848195857040774,6,3,4,10,7,1545
+TiDE forecast,bench_tide_sg_seed42_TiDE_SG_fc_exceedance_alpha_0.1,2,0.6429738329088585,7,0,4,5,5,2778
+TiDE forecast,bench_tide_sg_seed42_TiDE_SG_fc_exceedance_alpha_0.1,3,0.12874652672277487,8,2,5,12,10,3424
+TiDE forecast,bench_tide_sg_seed42_TiDE_SG_fc_exceedance_alpha_0.1,4,0.09150628588571899,12,2,5,13,11,941
+TiDE forecast,bench_tide_sg_seed7_TiDE_SG_fc_exceedance_alpha_0.1,1,0.45922578752860294,6,0,4,3,3,1545
+TiDE forecast,bench_tide_sg_seed7_TiDE_SG_fc_exceedance_alpha_0.1,2,0.1539053259925568,7,1,4,13,11,2778
+TiDE forecast,bench_tide_sg_seed7_TiDE_SG_fc_exceedance_alpha_0.1,3,0.1617006495216505,8,1,5,9,8,3424
+TiDE forecast,bench_tide_sg_seed7_TiDE_SG_fc_exceedance_alpha_0.1,4,0.23370233853594774,12,3,5,9,6,941
+TimeXer forecast,bench_timexer_sg_seed1_TimeXer_SG_fc_exceedance_alpha_0.1,1,0.046879248344140666,6,2,4,18,16,1545
+TimeXer forecast,bench_timexer_sg_seed1_TimeXer_SG_fc_exceedance_alpha_0.1,2,0.11718211118062151,7,3,4,11,8,2778
+TimeXer forecast,bench_timexer_sg_seed1_TimeXer_SG_fc_exceedance_alpha_0.1,3,0.032534159910045185,8,2,5,17,15,3424
+TimeXer forecast,bench_timexer_sg_seed1_TimeXer_SG_fc_exceedance_alpha_0.1,4,0.10921795207516898,12,4,5,13,9,941
+TimeXer forecast,bench_timexer_sg_seed42_TimeXer_SG_fc_exceedance_alpha_0.1,1,0.05151662962000655,6,2,4,16,14,1545
+TimeXer forecast,bench_timexer_sg_seed42_TimeXer_SG_fc_exceedance_alpha_0.1,2,0.058349166619854516,7,1,4,13,12,2778
+TimeXer forecast,bench_timexer_sg_seed42_TimeXer_SG_fc_exceedance_alpha_0.1,3,0.0600576152349848,8,1,5,5,4,3424
+TimeXer forecast,bench_timexer_sg_seed42_TimeXer_SG_fc_exceedance_alpha_0.1,4,0.02129134340433883,12,0,5,8,8,941
+TimeXer forecast,bench_timexer_sg_seed7_TimeXer_SG_fc_exceedance_alpha_0.1,1,0.0980950482773736,6,3,4,12,9,1545
+TimeXer forecast,bench_timexer_sg_seed7_TimeXer_SG_fc_exceedance_alpha_0.1,2,0.12532579978004946,7,1,4,14,13,2778
+TimeXer forecast,bench_timexer_sg_seed7_TimeXer_SG_fc_exceedance_alpha_0.1,3,0.09051373583455351,8,1,5,10,9,3424
+TimeXer forecast,bench_timexer_sg_seed7_TimeXer_SG_fc_exceedance_alpha_0.1,4,0.0759633313739938,12,3,5,11,8,941
 ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,1,0.7224205070210603,6,1,4,7,6,1545
 ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,2,0.9186166100416865,7,0,4,4,4,2778
 ANGEL classifier,full_seed1233_ANGEL_alpha_0.1,3,0.9731211141177586,8,0,5,2,2,3424

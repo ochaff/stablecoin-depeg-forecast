@@ -43,8 +43,8 @@ CV_MODELS = {
     "ANGEL exceedance": ("forecast", sorted(POOL.glob("fc_full_seed*_ANGEL_fc_exceedance_alpha_0.1"))),
     "ARIMA": ("forecast", [POOL / "bench_arima_seed1_ARIMA_fc_exceedance_alpha_0.1"]),
     "GARCH-t": ("forecast", [POOL / "bench_garch_t_seed1_GARCH_t_fc_exceedance_alpha_0.1"]),
-    "TiDE forecast": ("forecast", sorted(d for d in POOL.glob("bench_tide_nf_seed*_TiDE_NF_fc_exceedance_alpha_0.1") if (d / "artifacts/cv/operational_scores.parquet").exists())),
-    "TimeXer forecast": ("forecast", sorted(d for d in POOL.glob("bench_timexer_nf_seed*_TimeXer_NF_fc_exceedance_alpha_0.1") if (d / "artifacts/cv/operational_scores.parquet").exists())),
+    "TiDE forecast": ("forecast", sorted(d for d in POOL.glob("bench_tide_sg_seed*_TiDE_SG_fc_exceedance_alpha_0.1") if (d / "artifacts/cv/operational_scores.parquet").exists())),
+    "TimeXer forecast": ("forecast", sorted(d for d in POOL.glob("bench_timexer_sg_seed*_TimeXer_SG_fc_exceedance_alpha_0.1") if (d / "artifacts/cv/operational_scores.parquet").exists())),
     "ANGEL classifier": ("classifier", [POOL / "full_seed1233_ANGEL_alpha_0.1"]),
     "TiDE classifier": ("classifier", [POOL / "full_seed1233_TiDE_alpha_0.1"]),
     "TimeXer classifier": ("classifier", [POOL / "full_seed1233_TimeXer_alpha_0.1"]),
@@ -110,27 +110,39 @@ def run_cv():
 
 
 # ------------------------------------------------------------------------------------------------------- holdout
-EXTRA_SEEDS = {"TiDE (NF)": "tide_hist_exog", "TimeXer (NF)": "timeXer_hist_exog"}
+# TiDE / TimeXer: the paper's benchmarks (spline + GPD head, section 12), release seed 1 and seeds 7, 42.
+# (The MQLoss variants of benchmark_outputs/ here are no longer used.)
+S12 = REPO.parent / "onchain-insights/12. Evaluation of Probabilistic Forecasts/benchmark_outputs"
+SPLINE = {"TiDE": "tide_hist_exog", "TimeXer": "timeXer_hist_exog"}
 
 
-def extra_seed_scores(times):
-    """Exceedance scores of the extra TiDE / TimeXer holdout seeds (benchmark_outputs/<folder>_seed<s>/), cached."""
+def spline_scores(times):
+    """Exceedance scores of the spline + GPD TiDE / TimeXer holdout forecasts (all seeds), cached."""
     from holdout_exceedance_eval import exceedance
-    cache = REPO / "lightning_logs/holdout_exceedance_eval/extra_seed_scores.parquet"
+    cache = REPO / "lightning_logs/holdout_exceedance_eval/spline_gpd_scores.parquet"
     out = pd.read_parquet(cache) if cache.exists() else pd.DataFrame(index=times)
     new = False
-    for label, folder in EXTRA_SEEDS.items():
-        for f in sorted((REPO / "benchmark_outputs").glob(f"{folder}_seed*/preds_test_set.pkl")):
-            col = f"{label} {f.parent.name.split('_')[-1]}"
-            if col in out:
+    for label, folder in SPLINE.items():
+        for d, seed in [(S12 / folder, 1)] + [(S12 / f"{folder}_seed{s}", s) for s in (7, 42)]:
+            col, f = f"{label} SG seed{seed}", d / "preds_test_set.pkl"
+            if col in out or not f.exists():
                 continue
             A = pickle.load(open(f, "rb"))
-            t = pd.DatetimeIndex(pd.to_datetime(A["meta"]["cutoff"]).dt.tz_localize("UTC"))
-            out[col] = pd.Series(exceedance(A["Q"], np.asarray(A["u_grid"]), THRESHOLD, MIN_LEAD, MAX_LEAD), t).reindex(out.index)
+            t = pd.DatetimeIndex(pd.to_datetime(A["meta"]["cutoff"]))
+            t = t.tz_localize("UTC") if t.tz is None else t
+            assert A.get("head", "spline_gpd") == "spline_gpd", f
+            p = pd.Series(exceedance(A["Q"], np.asarray(A["u_grid"]), THRESHOLD, MIN_LEAD, MAX_LEAD), t)
+            out[col] = p.reindex(out.index)
+            assert out[col].notna().mean() > 0.99, (col, out[col].notna().mean())
             new = True
     if new:
         out.to_parquet(cache)
     return out
+
+
+# SCQF holdout seeds in the model comparison: three of the six ablation-study "full" runs (the three lowest seeds),
+# so that every trained model has three seeds (the ablation table keeps all six)
+SCQF_SEEDS = (1000, 1001, 1010)
 
 
 def holdout_scores(context):
@@ -147,15 +159,15 @@ def holdout_scores(context):
         col = "Kumo " + f.stem.split("_")[-1]
         h[col] = pd.Series(ks.probability.to_numpy(float), pd.to_datetime(ks.timestamp, utc=True)).reindex(times)
         kumo.append(col)
-    extra = extra_seed_scores(times)                                 # extra TiDE / TimeXer holdout seeds
+    extra = spline_scores(times)                                     # spline + GPD TiDE / TimeXer, all seeds
     for c in extra:
         h[c] = extra[c].reindex(times)
     absd = np.abs(context.set_index("timestamp").depeg_bps.reindex(times).to_numpy())
     h["|d| now"] = absd / (1 + absd)
-    series = {"ANGEL exceedance": ("forecast", [c for c in h if c.startswith("ANGEL_full_seed_")]),
+    series = {"ANGEL exceedance": ("forecast", [f"ANGEL_full_seed_{s}" for s in SCQF_SEEDS]),
               "ARIMA": ("forecast", ["ARIMA"]), "GARCH-t": ("forecast", ["GARCH-t"]),
-              "TiDE forecast": ("forecast", ["TiDE (NF)"] + [c for c in extra if c.startswith("TiDE")]),
-              "TimeXer forecast": ("forecast", ["TimeXer (NF)"] + [c for c in extra if c.startswith("TimeXer")]),
+              "TiDE forecast": ("forecast", [c for c in extra if c.startswith("TiDE")]),
+              "TimeXer forecast": ("forecast", [c for c in extra if c.startswith("TimeXer")]),
               "Kumo": ("classifier", kumo), "|d| now": ("naive", ["|d| now"])}
     return h, series
 
@@ -240,7 +252,7 @@ def run_holdout():
     t[["cutoff", "D", "N", "A", "F", "H"]].to_csv(DATA / "explainer_angel_seed1000_cutoffs.csv", index=False)
 
     # event paths and the first timely alert of each model, at the cutoff maximising V(0.1) on the holdout
-    # (ex post, identical treatment for every score; ANGEL = mean exceedance probability over its 6 seeds)
+    # (ex post, identical treatment for every score; ANGEL = mean exceedance probability over its 3 seeds)
     d = context.set_index("timestamp").depeg_bps
     paths = []
     for e in losses.index:
